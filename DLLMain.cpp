@@ -21,7 +21,7 @@
 
 using namespace P3D;
 
-class CustomPDKObjectsPlugin : public PdkPlugin
+class HoistP3DPlugin : public PdkPlugin
 {
 	double lengthFt = 5;
 	double maxLengthFt = 100;
@@ -35,6 +35,14 @@ class CustomPDKObjectsPlugin : public PdkPlugin
 
 	DXYZ hoistAttach = { 0, 0, 0 };
 	DXYZ hoistAttachLoad = { 0, 0, 0 };
+
+	bool m_bDrawUserSimObjects;
+	bool m_bHoistUp;
+	bool m_bHoistDown;
+
+	int m_uOneSecondTick;
+
+	double earthRadius = MetersToFeet(6371000); // in ft
 
 	///----------------------------------------------------------------------------
 	///  Menu Items
@@ -62,9 +70,8 @@ class CustomPDKObjectsPlugin : public PdkPlugin
 
 public:
 
-    CustomPDKObjectsPlugin() : PdkPlugin()
+	HoistP3DPlugin() : PdkPlugin()
     {
-        m_bDrawGroundObjectGrid = true;
 		m_bHoistUp = false;
 		m_bHoistDown = false;
 
@@ -80,7 +87,7 @@ public:
         m_spMenuDrawObjs->SetType(P3D::MenuTypePdk::MENU_CHECK_ITEM);
         m_spMenuDrawObjs->SetChecked(true);
         m_spMenuDrawObjs->SetText(L"Attach/Detach Hoist");
-        CustomPDKObjectsPlugin::MenuCallback * callback2 = new CustomPDKObjectsPlugin::MenuCallback(DRAW_OBJS);
+        MenuCallback * callback2 = new MenuCallback(DRAW_OBJS);
         m_spMenuDrawObjs->RegisterCallback(callback2);
         P3D::PdkServices::GetMenuService()->AddItem(m_spMenuDrawObjs->GetId(), m_spMenuTop->GetId(), 0);
 
@@ -88,14 +95,14 @@ public:
 		m_spMenuHoistDown->SetType(P3D::MenuTypePdk::MENU_CHECK_ITEM);
 		m_spMenuHoistDown->SetChecked(false);
 		m_spMenuHoistDown->SetText(L"Hoist down");
-		m_spMenuHoistDown->RegisterCallback(new CustomPDKObjectsPlugin::MenuCallback(HOIST_DOWN));
+		m_spMenuHoistDown->RegisterCallback(new MenuCallback(HOIST_DOWN));
 		P3D::PdkServices::GetMenuService()->AddItem(m_spMenuHoistDown->GetId(), m_spMenuTop->GetId(), 0);
 
 		m_spMenuHoistUp.Attach(P3D::PdkServices::GetMenuService()->CreateMenuItem());
 		m_spMenuHoistUp->SetType(P3D::MenuTypePdk::MENU_CHECK_ITEM);
 		m_spMenuHoistUp->SetChecked(false);
 		m_spMenuHoistUp->SetText(L"Hoist up");
-		m_spMenuHoistUp->RegisterCallback(new CustomPDKObjectsPlugin::MenuCallback(HOIST_UP));
+		m_spMenuHoistUp->RegisterCallback(new MenuCallback(HOIST_UP));
 		P3D::PdkServices::GetMenuService()->AddItem(m_spMenuHoistUp->GetId(), m_spMenuTop->GetId(), 0);
 
 		createPulldownMenu(m_spMenuCaptureSizeUp,   L"Increase capture size", CAPTURE_SIZE_UP, false);
@@ -106,7 +113,7 @@ public:
 		createPulldownMenu(m_spMenuReadConfig, L"Read config", READ_CONFIG, true);
     }
 
-	void createPulldownMenu( CComPtr<P3D::IMenuItemV410> &menu, wchar_t *pszText, CustomPDKObjectsPlugin::CALLBACK_IDS callbackid, bool bCheckItem )
+	void createPulldownMenu( CComPtr<P3D::IMenuItemV410> &menu, wchar_t *pszText, CALLBACK_IDS callbackid, bool bCheckItem )
 	{
 		menu.Attach(P3D::PdkServices::GetMenuService()->CreateMenuItem());
 		menu->SetType(bCheckItem?P3D::MenuTypePdk::MENU_CHECK_ITEM: P3D::MenuTypePdk::MENU_ITEM);
@@ -114,7 +121,7 @@ public:
 			menu->SetChecked(false);
 		}
 		menu->SetText(pszText);
-		menu->RegisterCallback(new CustomPDKObjectsPlugin::MenuCallback(callbackid));
+		menu->RegisterCallback(new MenuCallback(callbackid));
 		P3D::PdkServices::GetMenuService()->AddItem(menu->GetId(), m_spMenuTop->GetId(), 0);
 	}
 
@@ -354,7 +361,6 @@ protected:
 
 	DXYZ convertLonAltLat2XYZ( DXYZ lonAltLat) // rad_ft_rad
 	{
-		double earthRadius = MetersToFeet(6500000); // in ft
 		double r = earthRadius + lonAltLat.dY;
 		double lon = lonAltLat.dX;
 		double lat = lonAltLat.dZ;
@@ -550,14 +556,36 @@ protected:
 			}
 		}		
     }
+	
+	void ReadConfigFile()
+	{
+#define HOISTATTACH_TOKEN "hoistAttach="
+#define HOISTATTACHLOAD_TOKEN "hoistAttachLoad="
 
+		FILE *fp = fopen("hoistConfig.txt", "r");
+		if (fp) {
+			do {
+				char achLine[1024];
+				achLine[0] = '\0';
+				fgets(achLine, sizeof(achLine), fp);
+				printf("Line: %s", achLine);
 
-    bool m_bDrawGroundObjectGrid;
-    bool m_bDrawUserSimObjects;
-	bool m_bHoistUp;
-	bool m_bHoistDown;
+				if (strncmp(achLine, HOISTATTACH_TOKEN, strlen(HOISTATTACH_TOKEN)) == 0) {
+					char *pszCoords = achLine + strlen(HOISTATTACH_TOKEN);
+					sscanf(pszCoords, "%lf %lf %lf", &hoistAttach.dX, &hoistAttach.dY, &hoistAttach.dZ);
+				}
+				else if (strncmp(achLine, HOISTATTACHLOAD_TOKEN, strlen(HOISTATTACHLOAD_TOKEN)) == 0) {
+					char *pszCoords = achLine + strlen(HOISTATTACHLOAD_TOKEN);
+					sscanf(pszCoords, "%lf %lf %lf", &hoistAttachLoad.dX, &hoistAttachLoad.dY, &hoistAttachLoad.dZ);
+				}
 
-    int m_uOneSecondTick;
+			} while (!feof(fp));
+			fclose(fp);
+		}
+		else {
+			printf("hoistConfig could not be opened!\n");
+		}
+	}
 
 private:
     class MenuCallback : public P3D::ICallbackV400
@@ -580,12 +608,12 @@ private:
 ///----------------------------------------------------------------------------
 /// Prepar3D DLL start and end entry points
 ///----------------------------------------------------------------------------
-static CustomPDKObjectsPlugin* s_pCustomObjectsPlugin = nullptr;
+static HoistP3DPlugin *s_pCustomObjectsPlugin = nullptr;
 
 void __stdcall DLLStart(__in __notnull IPdk* pPdk)
 {
     PdkServices::Init(pPdk);
-    s_pCustomObjectsPlugin = new CustomPDKObjectsPlugin();
+    s_pCustomObjectsPlugin = new HoistP3DPlugin();
 }
 
 void __stdcall DLLStop(void)
@@ -597,47 +625,13 @@ void __stdcall DLLStop(void)
     PdkServices::Shutdown();
 }
 
-void CustomPDKObjectsPlugin::MenuCallback::Invoke(P3D::IParameterListV400 * pParams)
+void HoistP3DPlugin::MenuCallback::Invoke(P3D::IParameterListV400 * pParams)
 {
     switch (m_EventID)
     {
 	case READ_CONFIG:
 	{
-		FILE *fp = fopen("hoistConfigDummy.txt", "w+");
-		if (fp) {
-			fprintf(fp, "dummy");
-			fclose(fp);
-		}
-		else {
-			printf("hoistConfigDummy could not be opened!\n");
-		}
-
-#define HOISTATTACH_TOKEN "hoistAttach="
-#define HOISTATTACHLOAD_TOKEN "hoistAttachLoad="
-
-		fp = fopen("hoistConfig.txt", "r") ;
-		if (fp) {
-			do {
-				char achLine[1024];
-				achLine[0] = '\0';
-				fgets(achLine, sizeof(achLine), fp);
-				printf("Line: %s", achLine);
-				
-				if (strncmp(achLine, HOISTATTACH_TOKEN, strlen(HOISTATTACH_TOKEN)) == 0) {
-					char *pszCoords = achLine + strlen(HOISTATTACH_TOKEN);
-					sscanf(pszCoords, "%lf %lf %lf", &s_pCustomObjectsPlugin->hoistAttach.dX, &s_pCustomObjectsPlugin->hoistAttach.dY, &s_pCustomObjectsPlugin->hoistAttach.dZ);
-				}
-				else if (strncmp(achLine, HOISTATTACHLOAD_TOKEN, strlen(HOISTATTACHLOAD_TOKEN)) == 0) {
-					char *pszCoords = achLine + strlen(HOISTATTACHLOAD_TOKEN);
-					sscanf(pszCoords, "%lf %lf %lf", &s_pCustomObjectsPlugin->hoistAttachLoad.dX, &s_pCustomObjectsPlugin->hoistAttachLoad.dY, &s_pCustomObjectsPlugin->hoistAttachLoad.dZ);
-				}
-
-			} while (!feof(fp));
-			fclose(fp);
-		}
-		else {
-			printf("hoistConfig could not be opened!\n");
-		}
+		s_pCustomObjectsPlugin->ReadConfigFile();
 		break;
 	}
 
