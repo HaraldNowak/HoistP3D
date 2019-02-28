@@ -1,8 +1,7 @@
-// Copyright (c) 2010-2018 Lockheed Martin Corporation. All rights reserved.
-// Use of this file is bound by the PREPAR3D® SOFTWARE DEVELOPER KIT END USER LICENSE AGREEMENT 
+// Copyright (c) 2019 Harald Nowak. All rights reserved.
 
-// Custom PDK Objects
-// Description: This example uses the PDK to render custom PDK Objects.
+// HoistP3D
+// Description: This example uses the PDK to render an alternative P3D Hoist
 
 #include "initpdk.h"
 #include <WinError.h>
@@ -244,14 +243,6 @@ protected:
 					pRope->SetFixed(true, true);   // startpoint fixed
 					pRope->SetFixed(false, false); // endpoint swinging free
 					
-					/*
-					DXYZ body;
-					spUserObject->RotateWorldToBody(objLal, body);
-					body.dX += 0.2;
-					body.dY += 4.95;
-					body.dZ += 4.3;
-					spUserObject->RotateBodyToWorld(body, objLal);
-					*/
 					pRope->SetRenderWorldPosition(objLal);
 
 					pRope->SetRelativeGroundPosition(true /*bool 	bCheckGround*/, -minLengthFt);
@@ -282,8 +273,6 @@ protected:
 				slingPoint.dZ = DegToRad(slingPos.LLA.Latitude);				
 				pRope->SetRenderWorldPosition(slingPoint);
 				
-				//pRope->SetRenderWorldPosition(objLal);
-
 				pRope->SetStart(vStart);
 
 				P3DFXYZ end = pRope->GetEnd();
@@ -417,18 +406,6 @@ protected:
 		//ObjectWorldTransform offsetEndOfSling;
 		//pRenderer->ApplyBodyRelativeOffset(objTrans, toSling, objTransTemp2);
 		
-		/*ObjectWorldTransform slingPosTemp = slingPos;
-		slingPosTemp.PBH.Bank = 0;
-		slingPosTemp.PBH.Heading = 0;
-		slingPosTemp.PBH.Pitch = 0;
-		//pRenderer->ApplyBodyRelativeOffset(objTrans, toEndOfSling, endOfSling);
-
-		/*
-		DXYZ xyzSlingECF = convertLonAltLat2XYZ(slingPos.LLA);
-		DXYZ xyzObjTransECF = convertLonAltLat2XYZ(objTrans.LLA);
-		DXYZ delta = vectorSubtract(xyzObjTransECF, xyzSlingECF);
-		*/
-
 		DXYZ endInWorldCoord;
 		endInWorldCoord.dX = end.fX;
 		endInWorldCoord.dY = end.fY;
@@ -571,30 +548,7 @@ protected:
 			else {
 				printf("GetObject failed for %d\n", objectToPickUpID);
 			}
-		}
-		
-		/*
-		ARGBColor colorSphere2(255, 200, 200, 12);
-		pRenderer->DrawSphere(rightOfObject, 0.3, colorSphere2);
-		*/
-
-		/*
-        //Draw a rectangle to the left of the user object.
-        ARGBColor colorRectangleLeft(64, 0, 0, 125);
-        pRenderer->DrawRectangle(leftOfObject, 4, 4, 4, colorRectangleLeft);
-
-        //Draw a cylinder to the right of the user object.
-        ARGBColor colorCylinder(64, 125, 0, 125);
-        pRenderer->DrawCylinder(rightOfObject, 4, 4, colorCylinder);
-
-        //Draw a line between top left and top right of user object.
-        ARGBColor colorLine(64, 0, 125, 0);
-        pRenderer->DrawLine(leftTopOfObject.LLA, rightTopOfObject.LLA, 4, 4, colorLine);
-
-        //Draw a triangle above the rectangle object
-        ARGBColor colorTriangle(64, 125, 125, 0);
-        pRenderer->DrawTriangle(leftTopOfObject, 4, 4, 4, colorTriangle);
-		*/
+		}		
     }
 
 
@@ -611,10 +565,7 @@ private:
     public:
         MenuCallback(CALLBACK_IDS eventID)
             : m_EventID(eventID), m_RefCount(1)
-        {
-
-        }
-
+        {}
 
         virtual void Invoke(P3D::IParameterListV400* pParams) override;
 
@@ -699,33 +650,13 @@ void CustomPDKObjectsPlugin::MenuCallback::Invoke(P3D::IParameterListV400 * pPar
 	case CAPTURE_SIZE_UP:
 	{
 		s_pCustomObjectsPlugin->pickupradius *= 1.25;
-
-		/*
-		wchar_t achMenuText[256];
-		swprintf_s(achMenuText, 256, L"Increase capture size (current: %f)", s_pCustomObjectsPlugin->pickupradius);
-		s_pCustomObjectsPlugin->m_spMenuCaptureSizeDown->SetText(achMenuText);
-		*/
 		break;
 	}
 	case CAPTURE_SIZE_DOWN:
 	{
 		s_pCustomObjectsPlugin->pickupradius /= 1.25;
-
-		/*
-		wchar_t achMenuText[256];
-		swprintf_s(achMenuText, 256, L"Decrease capture size (current: %f)", s_pCustomObjectsPlugin->pickupradius);
-		s_pCustomObjectsPlugin->m_spMenuCaptureSizeDown->SetText(achMenuText);
-		*/
 		break;
 	}
-	/*
-    case DRAW_GRID:
-    {
-        s_pCustomObjectsPlugin->m_bDrawGroundObjectGrid = !s_pCustomObjectsPlugin->m_bDrawGroundObjectGrid;
-        s_pCustomObjectsPlugin->m_spMenuDrawGrid->SetChecked(s_pCustomObjectsPlugin->m_bDrawGroundObjectGrid);
-        break;
-    }
-	*/
     case DRAW_OBJS:
     {
         s_pCustomObjectsPlugin->m_bDrawUserSimObjects = !s_pCustomObjectsPlugin->m_bDrawUserSimObjects;
