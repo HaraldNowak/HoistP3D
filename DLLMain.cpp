@@ -6,7 +6,11 @@
 #include "initpdk.h"
 #include <WinError.h>
 #include "PdkPlugin.h"
+#include <map>
+#include <functional>
 #include <ctime>
+
+using namespace std;
 
 #include <string>
 
@@ -35,6 +39,7 @@ class HoistP3DPlugin : public PdkPlugin
 
 	DXYZ hoistAttach = { 0, 0, 0 };
 	DXYZ hoistAttachLoad = { 0, 0, 0 };
+	float fRopeMass = 5;
 
 	bool m_bDrawUserSimObjects;
 	bool m_bHoistUp;
@@ -111,6 +116,8 @@ public:
 		createPulldownMenu(m_spMenuCaptureVisible, L"Capture sphere visible", CAPTURE_VIS, true);
 
 		createPulldownMenu(m_spMenuReadConfig, L"Read config", READ_CONFIG, true);
+
+		ReadConfigFile();
     }
 
 	void createPulldownMenu( CComPtr<P3D::IMenuItemV410> &menu, wchar_t *pszText, CALLBACK_IDS callbackid, bool bCheckItem )
@@ -207,11 +214,11 @@ protected:
 		vStart.fY = 0;
 		vStart.fZ = 0;
 
-		if (hoistAttach.dX == 0) {
+		/*if (hoistAttach.dX == 0) {
 			hoistAttach.dX = 4.7;  //left/right
 			hoistAttach.dY = 4.95; // up/down (down is < 0)
 			hoistAttach.dZ = 1.9; // fore or aft
-		}
+		}*/
 
         // Get user sim from sim object manager
         PdkServices::GetSimObjectManager()->GetUserObject((IBaseObjectV400**)&spUserObject);
@@ -233,9 +240,7 @@ protected:
 			if (bInitRope || pRope == NULL) {
 
 				P3DFXYZ vEnd = vStart;
-				//vEnd.fZ += 30;
 
-				float fRopeMass = 5;
 				float fRestingRopeLength = minLengthFt;
 				float fRelativeGroundPosition = 0;
 				REFIID ropeRiid = IID_IRopeSimulationV420;
@@ -291,7 +296,7 @@ protected:
 
 				pRope->SetRelativeWind(vWind);
 
-				float dRadarAltitude = objLal.dY - fElevation;
+				float dRadarAltitude = /*objLal.dY*/slingPoint.dY - fElevation ;
 				pRope->SetRelativeGroundPosition(true /*bool 	bCheckGround*/, -dRadarAltitude);
 
 				double dt = 0;
@@ -335,7 +340,7 @@ protected:
 
 				//Draw hoisted object
 				
-				DrawSimObjects(spUserObject, pRenderer, objTrans, cameraTrans, end, objPhb, hoistAttach);
+				DrawSimObjects(spUserObject, pRenderer, objTrans, cameraTrans, end, objPhb, hoistAttach, lalVel);
 			}
         }
     }
@@ -384,7 +389,7 @@ protected:
 		return rc;
 	}
 
-    void DrawSimObjects(const CComPtr<IBaseObjectV400> &spUserObject, IObjectRendererV400* pRenderer, ObjectWorldTransform& objTrans, ObjectWorldTransform& cameraTrans, P3DFXYZ end, P3DDXYZ orient, DXYZ hoistAttach)
+    void DrawSimObjects(const CComPtr<IBaseObjectV400> &spUserObject, IObjectRendererV400* pRenderer, ObjectWorldTransform& objTrans, ObjectWorldTransform& cameraTrans, P3DFXYZ end, P3DDXYZ orient, DXYZ hoistAttach, DXYZ lalVel)
     {
         //Apply body relative offsets for rectangle placement.
         /*
@@ -454,8 +459,9 @@ protected:
 			IObjectRendererV440 *pV440Render = NULL;
 			pRenderer->QueryInterface(IID_IObjectRendererV440, (void **)&pV440Render );
 			if (pV440Render) {
-				wchar_t szText[256];
-				swprintf_s(szText, 256, L"Hoist length: %lf ft, pickup radius: %f m attach: %lf %lf %lf", lengthFt, pickupradius, hoistAttach.dX, hoistAttach.dY, hoistAttach.dZ);
+				wchar_t szText[1024];
+				ShowConfig(szText, 1024);
+				
 				ARGBColor colorText(255, 200, 12, 12);
 				TextDescription textDescr;
 				textDescr.HorizontalAlignment = HORIZONTAL_ALIGNMENT_LEFT;
@@ -536,11 +542,16 @@ protected:
 				vdOrient.dY = 0;// orient.dY;
 				vdOrient.dZ = 0;
 
-				P3DDXYZ vel = { 0 };
-				P3DDXYZ velRot = vel;
+				P3DDXYZ vel = lalVel; // same velocity as helicopter
+				P3DDXYZ velRot = { 0, 0, 0 };
 
 				// DXYZ finalEndPos = endPos; // rad_ft_rad
-				ObjectLocalTransform toAttachedLoad(FeetToMeters(hoistAttachLoad.dX), FeetToMeters(hoistAttachLoad.dY), FeetToMeters(hoistAttachLoad.dZ), 0, 0, 0);
+				DXYZ hoistAttachLoadInWorld;
+				DXYZ hoistAttachInHeli;
+				ptrPickupObject->RotateBodyToWorld(hoistAttachLoad, hoistAttachLoadInWorld); // from pickup body to world system
+				spUserObject->RotateWorldToBody(hoistAttachLoadInWorld, hoistAttachInHeli);    // from world to helicopter system
+
+				ObjectLocalTransform toAttachedLoad(FeetToMeters(hoistAttachInHeli.dX), FeetToMeters(hoistAttachInHeli.dY), FeetToMeters(hoistAttachInHeli.dZ), 0, 0, 0);
 				ObjectWorldTransform hoistAttachLoad;
 				pRenderer->ApplyBodyRelativeOffset(endOfSling, toAttachedLoad, hoistAttachLoad); // can only be calculated from object center (as we use "BodyRelativeOffset"), while end is relativ to slingPos
 
@@ -556,11 +567,51 @@ protected:
 			}
 		}		
     }
-	
+
+	void ShowConfig( wchar_t *szText, size_t bufSize )
+	{
+		swprintf_s(szText, bufSize, L"Hoist length: %lf ft, pickup radius: %f m attach: %lf %lf %lf mass: %f", lengthFt, pickupradius, hoistAttach.dX, hoistAttach.dY, hoistAttach.dZ, fRopeMass);
+	}
+
 	void ReadConfigFile()
 	{
-#define HOISTATTACH_TOKEN "hoistAttach="
-#define HOISTATTACHLOAD_TOKEN "hoistAttachLoad="
+#define HOISTATTACH_TOKEN "hoistAttach"
+#define HOISTATTACHLOAD_TOKEN "hoistAttachLoad"
+#define ROPEMASS_TOKEN "ropeMass"
+
+		class ReadConfigEntry {
+			std::function<void (char *)> pred;
+			std::string token;
+		public:
+			ReadConfigEntry() {}
+			ReadConfigEntry(std::string token_, std::function<void(char *)> pred_ ) {
+				pred = pred_;
+				token = token_;
+			}
+
+			void interpretConfigLine(char *achLine)
+			{ 
+				char *pszConfig = pszGetConfigEntry(achLine, (token+"=").c_str());
+				if (pszConfig) { 
+					pred(pszConfig);
+				}
+			}
+
+			static char *pszGetConfigEntry(char *achLine, const char *TOKEN)
+			{
+				char *pszEntry = NULL;
+				if (strncmp(achLine, TOKEN, strlen(TOKEN)) == 0) {
+					pszEntry = achLine + strlen(TOKEN);
+				}
+				return pszEntry;
+			}
+		};
+
+		std::map<std::string, ReadConfigEntry> configReaders;
+
+		configReaders[HOISTATTACH_TOKEN]     = ReadConfigEntry(HOISTATTACH_TOKEN, [this](char *pszConfig)		{ printf("ha:%s\n", pszConfig); sscanf(pszConfig, "%lf %lf %lf", &hoistAttach.dX, &hoistAttach.dY, &hoistAttach.dZ); });
+		configReaders[HOISTATTACHLOAD_TOKEN] = ReadConfigEntry(HOISTATTACHLOAD_TOKEN, [this](char *pszConfig)	{ printf("hal:%s\n", pszConfig); sscanf(pszConfig, "%lf %lf %lf", &hoistAttachLoad.dX, &hoistAttachLoad.dY, &hoistAttachLoad.dZ); } );
+		configReaders[ROPEMASS_TOKEN]		 = ReadConfigEntry(ROPEMASS_TOKEN, [this](char *pszConfig)			{ printf("m:%s\n", pszConfig); sscanf(pszConfig, "%f", &fRopeMass); });
 
 		FILE *fp = fopen("hoistConfig.txt", "r");
 		if (fp) {
@@ -570,13 +621,10 @@ protected:
 				fgets(achLine, sizeof(achLine), fp);
 				printf("Line: %s", achLine);
 
-				if (strncmp(achLine, HOISTATTACH_TOKEN, strlen(HOISTATTACH_TOKEN)) == 0) {
-					char *pszCoords = achLine + strlen(HOISTATTACH_TOKEN);
-					sscanf(pszCoords, "%lf %lf %lf", &hoistAttach.dX, &hoistAttach.dY, &hoistAttach.dZ);
-				}
-				else if (strncmp(achLine, HOISTATTACHLOAD_TOKEN, strlen(HOISTATTACHLOAD_TOKEN)) == 0) {
-					char *pszCoords = achLine + strlen(HOISTATTACHLOAD_TOKEN);
-					sscanf(pszCoords, "%lf %lf %lf", &hoistAttachLoad.dX, &hoistAttachLoad.dY, &hoistAttachLoad.dZ);
+				char *pszConfig = NULL;
+
+				for (auto mapEntry : configReaders) {
+					mapEntry.second.interpretConfigLine(achLine);
 				}
 
 			} while (!feof(fp));
