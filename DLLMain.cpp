@@ -40,6 +40,9 @@ class HoistP3DPlugin : public PdkPlugin
 	DXYZ hoistAttach = { 0, 0, 0 };
 	DXYZ hoistAttachLoad = { 0, 0, 0 };
 	float fRopeMass = 5;
+	float fStaticCGHeight = 5;
+
+	float fElevation = 0;
 
 	bool m_bDrawUserSimObjects;
 	bool m_bHoistUp;
@@ -48,6 +51,12 @@ class HoistP3DPlugin : public PdkPlugin
 	int m_uOneSecondTick;
 
 	double earthRadius = MetersToFeet(6371000); // in ft
+
+	boolean bInitRope = true;
+
+	IRopeSimulationV420 *pRope = NULL;
+
+	UINT objectToPickUpID = 0;
 
 	///----------------------------------------------------------------------------
 	///  Menu Items
@@ -136,12 +145,6 @@ public:
     ///  PdkPlugin Callback overrides
     ///----------------------------------------------------------------------------
 
-	boolean bInitRope = true ;
-
-	IRopeSimulationV420 *pRope = NULL;
-
-	UINT objectToPickUpID = 0;
-
     virtual void OnCustomRender(IParameterListV400* pParams) override
     {
         // Get the Object Renderer service from the callback params
@@ -176,6 +179,7 @@ public:
 
 				if (pRope) {
 					pRope->Release();
+					pRope = NULL;
 				}
 			}
         }
@@ -234,7 +238,6 @@ protected:
             objTrans.PBH.Bank = (float)RadToDeg(objPhb.dZ);
             objTrans.PBH.Heading = (float)RadToDeg(objPhb.dY);
 
-			float fElevation;
 			spUserObject->GetSurfaceElevation(fElevation, NULL);
 			
 			if (bInitRope || pRope == NULL) {
@@ -286,7 +289,7 @@ protected:
 				pRope->SetRenderWorldPosition(slingPoint);
 				
 				pRope->SetStart(vStart);
-
+				
 				P3DFXYZ end = pRope->GetEnd();
 
 				P3DFXYZ vWind;
@@ -340,7 +343,7 @@ protected:
 
 				//Draw hoisted object
 				
-				DrawSimObjects(spUserObject, pRenderer, objTrans, cameraTrans, end, objPhb, hoistAttach, lalVel);
+				DrawSimObjects(spUserObject, pRenderer, objTrans, cameraTrans, end, objPhb, hoistAttach, lalVel, slingPoint.dY+end.fY - fElevation);
 			}
         }
     }
@@ -389,7 +392,7 @@ protected:
 		return rc;
 	}
 
-    void DrawSimObjects(const CComPtr<IBaseObjectV400> &spUserObject, IObjectRendererV400* pRenderer, ObjectWorldTransform& objTrans, ObjectWorldTransform& cameraTrans, P3DFXYZ end, P3DDXYZ orient, DXYZ hoistAttach, DXYZ lalVel)
+    void DrawSimObjects(const CComPtr<IBaseObjectV400> &spUserObject, IObjectRendererV400* pRenderer, ObjectWorldTransform& objTrans, ObjectWorldTransform& cameraTrans, P3DFXYZ end, P3DDXYZ orient, DXYZ hoistAttach, DXYZ lalVel, double dEndOverGround)
     {
         //Apply body relative offsets for rectangle placement.
         /*
@@ -406,6 +409,22 @@ protected:
         pRenderer->ApplyBodyRelativeOffset(objTrans, toLeftTop, leftTopOfObject);
         pRenderer->ApplyBodyRelativeOffset(objTrans, toRightTop, rightTopOfObject);
 		*/
+
+		IObjectRendererV440 *pV440Render = NULL;
+		pRenderer->QueryInterface(IID_IObjectRendererV440, (void **)&pV440Render);
+		if (pV440Render) {
+			wchar_t szText[1024];
+			ShowConfig(szText, 1024);
+
+			ARGBColor colorText(255, 200, 12, 12);
+			TextDescription textDescr;
+			textDescr.HorizontalAlignment = HORIZONTAL_ALIGNMENT_LEFT;
+			textDescr.Font = TEXT_FONT_DEFAULT;
+			RenderFlags renderFlags = { 0 };
+			pV440Render->DrawText2D(25, 25, szText, colorText, textDescr, renderFlags);
+
+			pV440Render->Release();
+		}
 
 		double ft2m = 0.3048;
 
@@ -455,22 +474,6 @@ protected:
 				//ARGBColor colorSphere2(64, 12, 12, 200);
 				//pRenderer->DrawSphere(objTransTemp2, pickupradius, colorSphere2);
 			}
-
-			IObjectRendererV440 *pV440Render = NULL;
-			pRenderer->QueryInterface(IID_IObjectRendererV440, (void **)&pV440Render );
-			if (pV440Render) {
-				wchar_t szText[1024];
-				ShowConfig(szText, 1024);
-				
-				ARGBColor colorText(255, 200, 12, 12);
-				TextDescription textDescr;
-				textDescr.HorizontalAlignment = HORIZONTAL_ALIGNMENT_LEFT;
-				textDescr.Font = TEXT_FONT_DEFAULT;
-				RenderFlags renderFlags = { 0 };
-				pV440Render->DrawText2D(50, 50, szText, colorText, textDescr, renderFlags);
-
-				pV440Render->Release();
-			}
 			
 			unsigned int numOfCloseObjects = 200;
 			unsigned int objids[200];
@@ -516,18 +519,18 @@ protected:
 							printf("Picking up object %d dist %lf %lf,%lf,%lf vs %lf,%lf,%lf title %ls path %ls\n", objectToPickUpID, dist, vXYZ.dX, vXYZ.dY, vXYZ.dZ, endPosXYZ.dX, endPosXYZ.dY, endPosXYZ.dZ, achTitle, achPath);
 						}
 						else {
-							printf("Not picking up object %d dist %lf %ls ", objId, dist, achTitle );
+							// printf("Not picking up object %d dist %lf %ls ", objId, dist, achTitle );
 						}
 					}
 				}
 			}
 		}
-		else {
+		else { // we do have an object picked up:
 
-			if (bCaptVis) {
+			/*if (bCaptVis) {
 				ARGBColor colorSphere(0, 12, 200, 12);
 				pRenderer->DrawSphere(endOfSling, pickupradius, colorSphere);
-			}
+			}*/
 			// Object picked up already: render it:			
 			CComPtr<IBaseObjectV400> ptrPickupObject;
 
@@ -537,18 +540,24 @@ protected:
 			}
 			if (ptrPickupObject != nullptr)
 			{
-				P3DDXYZ vdOrient ;
-				vdOrient.dX = 0;
-				vdOrient.dY = 0;// orient.dY;
-				vdOrient.dZ = 0;
-
 				P3DDXYZ vel = lalVel; // same velocity as helicopter
 				P3DDXYZ velRot = { 0, 0, 0 };
+
+				double pitchLoadInRad = -atan(sqrt(end.fX*end.fX + end.fZ*end.fZ) / end.fY);
+
+				// Hoist point must be rotatet if load is pitched in the loads coordinate system
+				double yAttach = hoistAttachLoad.dY;
+				double zAttach = hoistAttachLoad.dZ;
+
+				DXYZ hoistAttachLoadRot;
+				hoistAttachLoadRot.dX = hoistAttachLoad.dX;
+				hoistAttachLoadRot.dY = yAttach*cos(pitchLoadInRad) - zAttach*sin(pitchLoadInRad);
+				hoistAttachLoadRot.dZ = yAttach*sin(pitchLoadInRad) + zAttach*cos(pitchLoadInRad);
 
 				// DXYZ finalEndPos = endPos; // rad_ft_rad
 				DXYZ hoistAttachLoadInWorld;
 				DXYZ hoistAttachInHeli;
-				ptrPickupObject->RotateBodyToWorld(hoistAttachLoad, hoistAttachLoadInWorld); // from pickup body to world system
+				ptrPickupObject->RotateBodyToWorld(hoistAttachLoadRot, hoistAttachLoadInWorld); // from pickup body to world system
 				spUserObject->RotateWorldToBody(hoistAttachLoadInWorld, hoistAttachInHeli);    // from world to helicopter system
 
 				ObjectLocalTransform toAttachedLoad(FeetToMeters(hoistAttachInHeli.dX), FeetToMeters(hoistAttachInHeli.dY), FeetToMeters(hoistAttachInHeli.dZ), 0, 0, 0);
@@ -560,7 +569,26 @@ protected:
 				finalEndPos.dY = hoistAttachLoad.LLA.Altitude / ft2m;	   // ft
 				finalEndPos.dZ = hoistAttachLoad.LLA.Latitude / 180 * PI;  // rad
 
-				ptrPickupObject->SetPosition(finalEndPos, vdOrient, vel, velRot, false, 0);
+				P3DDXYZ vdOrient;
+				vdOrient.dX = pitchLoadInRad;
+				vdOrient.dY = orient.dY;
+				vdOrient.dZ = 0;
+
+				//float fElevation;
+				//spUserObject->GetSurfaceElevation(fElevation, NULL);
+
+				if (dEndOverGround > -this->hoistAttachLoad.dY + this->fStaticCGHeight )
+				{
+					ptrPickupObject->SetPosition(finalEndPos, vdOrient, vel, velRot, false, 0);
+					
+					printf("endOverGround: %lf\n", dEndOverGround);
+				} else {
+					// Not yet lifting (or sinking into the ground)
+					printf("nonlift endOverGround: %lf\n", dEndOverGround);
+
+					finalEndPos.dY = this->fStaticCGHeight + fElevation; // set it on the ground
+					ptrPickupObject->SetPosition(finalEndPos, vdOrient, vel, velRot, true, 0);
+				}
 			}
 			else {
 				printf("GetObject failed for %d\n", objectToPickUpID);
@@ -570,7 +598,7 @@ protected:
 
 	void ShowConfig( wchar_t *szText, size_t bufSize )
 	{
-		swprintf_s(szText, bufSize, L"Hoist length: %lf ft, pickup radius: %f m attach: %lf %lf %lf mass: %f", lengthFt, pickupradius, hoistAttach.dX, hoistAttach.dY, hoistAttach.dZ, fRopeMass);
+		swprintf_s(szText, bufSize, L"elev: %.2f, Hoist length: %.2lf ft, pickup radius: %.2f m objid %d attach: %.2lf %.2lf %.2lf mass: %.2f cg: %.2f", fElevation, lengthFt, pickupradius, objectToPickUpID, hoistAttach.dX, hoistAttach.dY, hoistAttach.dZ, fRopeMass, fStaticCGHeight);
 	}
 
 	void ReadConfigFile()
@@ -578,6 +606,7 @@ protected:
 #define HOISTATTACH_TOKEN "hoistAttach"
 #define HOISTATTACHLOAD_TOKEN "hoistAttachLoad"
 #define ROPEMASS_TOKEN "ropeMass"
+#define STATICCGLOAD_TOKEN "static_cg_height"
 
 		class ReadConfigEntry {
 			std::function<void (char *)> pred;
@@ -612,6 +641,7 @@ protected:
 		configReaders[HOISTATTACH_TOKEN]     = ReadConfigEntry(HOISTATTACH_TOKEN, [this](char *pszConfig)		{ printf("ha:%s\n", pszConfig); sscanf(pszConfig, "%lf %lf %lf", &hoistAttach.dX, &hoistAttach.dY, &hoistAttach.dZ); });
 		configReaders[HOISTATTACHLOAD_TOKEN] = ReadConfigEntry(HOISTATTACHLOAD_TOKEN, [this](char *pszConfig)	{ printf("hal:%s\n", pszConfig); sscanf(pszConfig, "%lf %lf %lf", &hoistAttachLoad.dX, &hoistAttachLoad.dY, &hoistAttachLoad.dZ); } );
 		configReaders[ROPEMASS_TOKEN]		 = ReadConfigEntry(ROPEMASS_TOKEN, [this](char *pszConfig)			{ printf("m:%s\n", pszConfig); sscanf(pszConfig, "%f", &fRopeMass); });
+		configReaders[STATICCGLOAD_TOKEN]    = ReadConfigEntry(STATICCGLOAD_TOKEN, [this](char *pszConfig) { printf("cg:%s\n", pszConfig); sscanf(pszConfig, "%f", &fStaticCGHeight); });
 
 		FILE *fp = fopen("hoistConfig.txt", "r");
 		if (fp) {
