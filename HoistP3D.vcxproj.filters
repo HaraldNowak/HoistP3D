@@ -4,6 +4,9 @@
     <ClCompile Include="DLLMain.cpp">
       <Filter>Source</Filter>
     </ClCompile>
+    <ClCompile Include="UnitTest.cpp">
+      <Filter>Source</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <Filter Include="Resource">
@@ -15,5 +18,19 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="HoistP3D.def" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="ObjectSimCfgProps.h">
+      <Filter>Source</Filter>
+    </ClInclude>
+    <ClInclude Include="ReadConfig.h">
+      <Filter>Source</Filter>
+    </ClInclude>
+    <ClInclude Include="vectorGeo.h">
+      <Filter>Source</Filter>
+    </ClInclude>
+    <ClInclude Include="HoistP3DBase.h">
+      <Filter>Source</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>
