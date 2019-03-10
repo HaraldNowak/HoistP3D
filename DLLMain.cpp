@@ -24,7 +24,7 @@ using namespace std;
 
 using namespace P3D;
 
-class HoistP3DPlugin : public PdkPlugin, HoistP3DBase
+class HoistP3DPlugin : public PdkPlugin, HoistP3DBase, IForceElement
 {
 	double lengthFt = 5;
 	double maxLengthFt = 100;
@@ -38,7 +38,8 @@ class HoistP3DPlugin : public PdkPlugin, HoistP3DBase
 
 	DXYZ hoistAttach = { 0, 0, 0 };
 	DXYZ hoistAttachLoad = { 0, 0, 0 };
-	float fRopeMass = 5;
+	double massLoad = 200;
+	float fRopeMass = 0.2;
 	float fStaticCGHeight = 5;
 
 	float fElevation = 0;
@@ -46,12 +47,14 @@ class HoistP3DPlugin : public PdkPlugin, HoistP3DBase
 
 	double lastRopeForce = 0; // to calculate 2st derivative
 	double lastRopeLen = 0 ;
-	double kRope = 1 ;
+	double kRope = 20 ;
 	double diffRopeLen = 0;
 	double damping = 1;
 	double speedforce = 1;
 
+	ObjectWorldTransform objTrans ; // current helicopter pos
 	P3DDXYZ endPos; // dynamic - end of open sling
+	ObjectWorldTransform worldObjectPlacement; // dynamic - pos of last object placement
 
 	bool m_bDrawUserSimObjects;
 	bool m_bHoistUp;
@@ -68,6 +71,7 @@ class HoistP3DPlugin : public PdkPlugin, HoistP3DBase
 	IRopeSimulationV420 *pRope = NULL;
 
 	UINT objectToPickUpID = 0;
+	UINT objectPlaced = 0; // ID of last placed object (just needed for debug marker)
 
 	string hoistConfigPath = "hoistConfig.txt" ;
 
@@ -77,7 +81,11 @@ class HoistP3DPlugin : public PdkPlugin, HoistP3DBase
 	//std::set<string> pickupObjectTitles;
 	string pickupObjectDirectory = "";
 
+	bool m_bPlaceAtHoist = true ;
+	double m_PlaceDistanceInM = 0.0 ;
+
 	CComPtr<P3D::IGlobalDataV430> ptrGlobalData;
+	CComPtr<IObjectRendererV400>  m_spRenderService = NULL;
 
 	int bDebug = false; // int on purpose (makes conf reading easier)
 
@@ -97,7 +105,18 @@ class HoistP3DPlugin : public PdkPlugin, HoistP3DBase
 	CComPtr<P3D::IMenuItemV410> m_spMenuReadConfig;
 	CComPtr<P3D::IMenuItemV410> m_spSwitchToForcePhysics;
 	CComPtr<P3D::IMenuItemV410> m_spUntieObject;
+	
 	CComPtr<P3D::IMenuItemV410> m_spCreateAndAttachObject;
+
+	CComPtr<P3D::IMenuItemV410> m_spPickupObjectsPlacementParentMenu;
+	CComPtr<P3D::IMenuItemV410> m_spPickupObjectsPlacementAtHoist;
+	CComPtr<P3D::IMenuItemV410> m_spPickupObjectsPlacementUnderHeli;
+	CComPtr<P3D::IMenuItemV410> m_spPickupObjectsPlacement5mAhead;
+	CComPtr<P3D::IMenuItemV410> m_spPickupObjectsPlacement10mAhead;
+	CComPtr<P3D::IMenuItemV410> m_spPickupObjectsPlacement100mAhead;
+	CComPtr<P3D::IMenuItemV410> m_spPickupObjectsPlacement1nmAhead;
+	CComPtr<P3D::IMenuItemV410> m_spPickupObjectsPlacement5nmAhead;
+	CComPtr<P3D::IMenuItemV410> m_spPickupObjectsPlacement10nmAhead;
 
 	CComPtr<P3D::IMenuItemV410> m_spPickupObjectsParentMenu;
 	vector<CComPtr<P3D::IMenuItemV410> > m_VecMenuPickupObject;
@@ -113,6 +132,17 @@ class HoistP3DPlugin : public PdkPlugin, HoistP3DBase
 		READ_CONFIG,
 		FORCE_PHYSICS,
 		UNTIE_OBJECT,
+
+		PICKUP_OBJECT_PLACEPARENT,
+		PICKUP_OBJECT_PLACE_ATTHOIST,
+		PICKUP_OBJECT_PLACE_UNDER,
+		PICKUP_OBJECT_PLACE_5mAHEAD,
+		PICKUP_OBJECT_PLACE_10mAHEAD,
+		PICKUP_OBJECT_PLACE_100mAHEAD,
+		PICKUP_OBJECT_PLACE_1nmAHEAD,
+		PICKUP_OBJECT_PLACE_5nmAHEAD,
+		PICKUP_OBJECT_PLACE_10nmAHEAD,
+
 		CREATE_AND_ATTACH_OBJECT,
 
 		PICKUP_OBJECT_BASE = 100
@@ -126,7 +156,7 @@ class HoistP3DPlugin : public PdkPlugin, HoistP3DBase
 			: m_EventID(eventID), m_RefCount(1)
 		{}
 
-		MenuCallback(CALLBACK_IDS eventID, std::string &name_)
+		MenuCallback(CALLBACK_IDS eventID, const std::string &name_)
 			: m_EventID(eventID), m_RefCount(1)
 		{
 			name = name_;
@@ -210,6 +240,16 @@ public:
 
 		createPulldownMenu(m_spCreateAndAttachObject, L"Create and attach object", CREATE_AND_ATTACH_OBJECT, false);
 
+		createPulldownMenu(m_spPickupObjectsPlacementParentMenu, L"Place Objects...", PICKUP_OBJECT_PLACEPARENT, false);
+		createPulldownMenu(m_spPickupObjectsPlacementAtHoist,	 L"Attached to hoist", PICKUP_OBJECT_PLACE_ATTHOIST, true, m_spPickupObjectsPlacementParentMenu, "hoist");
+		createPulldownMenu(m_spPickupObjectsPlacementUnderHeli,  L"Under aircraft", PICKUP_OBJECT_PLACE_UNDER, true, m_spPickupObjectsPlacementParentMenu, "0m" );
+		createPulldownMenu(m_spPickupObjectsPlacement10mAhead, L"10m ahead", PICKUP_OBJECT_PLACE_10mAHEAD, true, m_spPickupObjectsPlacementParentMenu, "10m");
+		createPulldownMenu(m_spPickupObjectsPlacement5mAhead, L"50m ahead", PICKUP_OBJECT_PLACE_5mAHEAD, true, m_spPickupObjectsPlacementParentMenu, "50m" );
+		createPulldownMenu(m_spPickupObjectsPlacement100mAhead, L"100m ahead", PICKUP_OBJECT_PLACE_100mAHEAD, true, m_spPickupObjectsPlacementParentMenu, "100m" );
+		createPulldownMenu(m_spPickupObjectsPlacement1nmAhead,   L"1nm ahead", PICKUP_OBJECT_PLACE_1nmAHEAD, true, m_spPickupObjectsPlacementParentMenu, "1nm");
+		createPulldownMenu(m_spPickupObjectsPlacement5nmAhead, L"5nm ahead", PICKUP_OBJECT_PLACE_5nmAHEAD, true, m_spPickupObjectsPlacementParentMenu, "5nm" );
+		createPulldownMenu(m_spPickupObjectsPlacement10nmAhead, L"10nm ahead", PICKUP_OBJECT_PLACE_10nmAHEAD, true, m_spPickupObjectsPlacementParentMenu, "10nm");
+
 		createPulldownMenu(m_spPickupObjectsParentMenu, L"Objects...", PICKUP_OBJECT_BASE, false);
 
 		InitPickupObjectsMenu();
@@ -251,7 +291,7 @@ public:
 		createPulldownMenu(menu, pszText, callbackid, bCheckItem, m_spMenuTop, string(""));
 	}
 
-	void createPulldownMenu( CComPtr<P3D::IMenuItemV410> &menu, wchar_t *pszText, CALLBACK_IDS callbackid, bool bCheckItem, CComPtr<P3D::IMenuItemV410> &m_spParentMenu, string &name)
+	void createPulldownMenu( CComPtr<P3D::IMenuItemV410> &menu, wchar_t *pszText, CALLBACK_IDS callbackid, bool bCheckItem, CComPtr<P3D::IMenuItemV410> &m_spParentMenu, const string &name)
 	{
 		menu.Attach(P3D::PdkServices::GetMenuService()->CreateMenuItem());
 		menu->SetType(bCheckItem?P3D::MenuTypePdk::MENU_CHECK_ITEM: P3D::MenuTypePdk::MENU_ITEM);
@@ -270,11 +310,13 @@ public:
     virtual void OnCustomRender(IParameterListV400* pParams) override
     {
         // Get the Object Renderer service from the callback params
-        CComPtr<IObjectRendererV400>    spRenderService = NULL;
 		CComPtr<IVisualEffectManagerV430> ptrVisEffect = NULL;
 		CComPtr<ISimObjectManagerV440> ptrSimObjectManager = NULL;
 
-		HRESULT hResRender = pParams->GetServiceProvider()->QueryService(SID_ObjectRenderer, IID_IObjectRendererV400, (void**)&spRenderService);
+		HRESULT hResRender = S_OK;
+		if (m_spRenderService == NULL) {
+			hResRender = pParams->GetServiceProvider()->QueryService(SID_ObjectRenderer, IID_IObjectRendererV400, (void**)&m_spRenderService);
+		}
 
 		HRESULT hResVisEff = pParams->GetServiceProvider()->QueryService(SID_VisualEffectManager, IID_IVisualEffectManagerV430, (void**)&ptrVisEffect);
 		if (!SUCCEEDED(hResVisEff)) {
@@ -299,7 +341,7 @@ public:
         {
             if (m_bDrawUserSimObjects)
             {
-                DrawUserSimObjects(spRenderService, ptrVisEffect, pParams->GetServiceProvider());
+                DrawUserSimObjects(ptrVisEffect, pParams->GetServiceProvider());
 			}
 			else {
 				printf("Rope will be reinited...\n");
@@ -326,12 +368,12 @@ protected:
     ///  Object drawing functions
     ///----------------------------------------------------------------------------
 
-    void DrawUserSimObjects(IObjectRendererV400* pRenderer, IVisualEffectManagerV430 *pVisEffect, /* ISimObjectManagerV440 *pSimObjectManager*/ IServiceProvider* pServiceProvider)
+    void DrawUserSimObjects(IVisualEffectManagerV430 *pVisEffect, /* ISimObjectManagerV440 *pSimObjectManager*/ IServiceProvider* pServiceProvider)
     {
         CComPtr<IWindowV400> spWindow = NULL;
         CComPtr<IBaseObjectV400> spUserObject = NULL;
 		
-        ObjectWorldTransform objTrans, cameraTrans;
+        ObjectWorldTransform cameraTrans;
 
         // Get current window
 		/*
@@ -409,7 +451,7 @@ protected:
 			else {				
 				ObjectLocalTransform toSling(FeetToMeters(hoistAttach.dX), FeetToMeters(hoistAttach.dY), FeetToMeters(hoistAttach.dZ), 0, 0, 0);
 				ObjectWorldTransform slingPos ;
-				pRenderer->ApplyBodyRelativeOffset(objTrans, toSling, slingPos);
+				m_spRenderService->ApplyBodyRelativeOffset(objTrans, toSling, slingPos);
 				
 				//result: LLADegreesMeters:
 				//slingPos.LLA.Altitude;
@@ -497,12 +539,12 @@ protected:
 
 				//Draw hoisted object
 				
-				DrawSimObjects(spUserObject, pRenderer, objTrans, cameraTrans, end, objPhb, hoistAttach, lalVel, slingPoint.dY+end.fY - fElevation, slingPoint, dt);
+				DrawSimObjects(spUserObject, objTrans, cameraTrans, end, objPhb, hoistAttach, lalVel, slingPoint.dY+end.fY - fElevation, slingPoint, dt);
 			}
         }
     }
 
-	ObjectWorldTransform getHoistAttachPointInWorldCoords( const CComPtr<IBaseObjectV400> &ptrObject, IObjectRendererV400* pRenderer)
+	ObjectWorldTransform getHoistAttachPointInWorldCoords( const CComPtr<IBaseObjectV400> &ptrObject)
 	{
 		DXYZ vLonAltLat;
 		DXYZ vPHB;
@@ -520,7 +562,7 @@ protected:
 		posObj.PBH.Heading = (float)RadToDeg(vPHB.dY);
 		ObjectLocalTransform toLoadAttach(FeetToMeters(-hoistAttachLoad.dX), FeetToMeters(-hoistAttachLoad.dY), FeetToMeters(-hoistAttachLoad.dZ), 0, 0, 0);
 		ObjectWorldTransform toAttachLoadWorld;
-		pRenderer->ApplyBodyRelativeOffset(posObj, toLoadAttach, toAttachLoadWorld);
+		m_spRenderService->ApplyBodyRelativeOffset(posObj, toLoadAttach, toAttachLoadWorld);
 
 		return toAttachLoadWorld ;
 	}
@@ -543,6 +585,44 @@ protected:
 		m_spSwitchToForcePhysics->SetChecked(m_bForcePhysics);
 		if (b == true) {
 			diffRopeLen = 0;
+
+			/*
+			CComPtr<IBaseObjectV400> spUserObject = NULL;
+			PdkServices::GetSimObjectManager()->GetUserObject((IBaseObjectV400**)&spUserObject);
+			if (spUserObject != nullptr)
+			{				
+				IForceMomentsV01 *pForceMoments = NULL;
+				HRESULT hRes = spUserObject->QueryService(SID_ForceMoments, IID_IForceMomentsV01, (void **)&pForceMoments);
+				//HRESULT hRes = spUserObject->QueryInterface(IID_IForceMomentsV01, (void **)&pForceMoments);
+				if (!SUCCEEDED(hRes)) {
+					printf("QueryService IID_IForceMoments failed: %d\n", hRes);
+				} else {
+					printf("ForceElement about to be registered\n");
+					pForceMoments->RegisterElement(this);
+					pForceMoments->Release();
+
+					printf("ForceElement registered\n");
+				}
+			}
+			*/
+		} else {
+			/*
+			CComPtr<IBaseObjectV400> spUserObject = NULL;
+			PdkServices::GetSimObjectManager()->GetUserObject((IBaseObjectV400**)&spUserObject);
+			if (spUserObject != nullptr)
+			{
+				IForceMomentsV01 *pForceMoments = NULL;
+				HRESULT hRes = spUserObject->QueryService(SID_ForceMoments, IID_IForceMomentsV01, (void **)&pForceMoments);
+				if (!SUCCEEDED(hRes)) {
+					printf("QueryService IID_IForceMoments failed: %d\n", hRes);
+				} else {
+					pForceMoments->UnRegisterElement(this);
+					pForceMoments->Release();
+
+					printf("ForceElement unregistered\n");
+				}
+			}
+			*/
 		}
 	}
 
@@ -553,10 +633,11 @@ protected:
 		wchar_t wObjectTitle[256];
 		mbstowcs(wObjectTitle, pickupObjectTitle.c_str(), 512);
 		
-		HRESULT hRes = pObjectManager->CreateObject(wObjectTitle, this->objectToPickUpID) ;
+		UINT objectID;
+		HRESULT hRes = pObjectManager->CreateObject(wObjectTitle, objectID) ;
 		if (SUCCEEDED(hRes)) {
 			CComPtr<IBaseObjectV400> ptrObject;
-			hRes = pObjectManager->GetObject(this->objectToPickUpID, &ptrObject);
+			hRes = pObjectManager->GetObject(objectID, &ptrObject);
 			if (SUCCEEDED(hRes)) {
 
 				double lfCg = -1;
@@ -574,16 +655,86 @@ protected:
 				wcstombs(achPath, wachPath, 512);
 				ObjectSimCfgProps props = objectSimProps.getObjectSimCfg(achPath); // caches relevant sim cfg values
 
-				hoistAttachLoad.dX = -props.hoistAttachLoad.dY;
-				hoistAttachLoad.dY = -props.hoistAttachLoad.dZ;
-				hoistAttachLoad.dZ = -props.hoistAttachLoad.dX;
-
-				printf("setting hoistpoint: %lf %lf %lf\n", hoistAttachLoad.dX, hoistAttachLoad.dY, hoistAttachLoad.dZ);
-
 				DXYZ vdOrient = { 0, 0, 0 };
 				DXYZ vel = { 0,0,0 };
 				DXYZ velRot = { 0,0,0 };
-				ptrObject->SetPosition(endPos, vdOrient, vel, velRot, false, 0);
+
+				if (m_bPlaceAtHoist) { // place it and endpos, hoist will pick it up automatically
+
+					hoistAttachLoad.dX = -props.hoistAttachLoad.dY;
+					hoistAttachLoad.dY = -props.hoistAttachLoad.dZ;
+					hoistAttachLoad.dZ = -props.hoistAttachLoad.dX;
+					massLoad = props.mass;
+					printf("setting hoistpoint: %lf %lf %lf setting mass %lf\n", hoistAttachLoad.dX, hoistAttachLoad.dY, hoistAttachLoad.dZ, massLoad);
+
+					this->objectToPickUpID = objectID;
+					ptrObject->SetPosition(endPos, vdOrient, vel, velRot, false, 0);
+				} 
+				else
+				{
+					this->objectPlaced = objectID;
+					// current heli pos in objTrans - translate locally for the m given:
+					ObjectLocalTransform toObjectPlacement(0, 0, m_PlaceDistanceInM, 0, 0, 0); // m_PlaceDistanceInM ahead					
+					m_spRenderService->ApplyBodyRelativeOffset(objTrans, toObjectPlacement, worldObjectPlacement);
+
+					// Get Elevation there:
+					P3DDXYZ objPos = extractPosFromWorldDegMeters(worldObjectPlacement);
+
+					//objPos.dX = DegToRad(worldObjectPlacement.LLA.Longitude);
+					//objPos.dY = MetersToFeet(worldObjectPlacement.LLA.Altitude);
+					//objPos.dZ = DegToRad(worldObjectPlacement.LLA.Latitude);
+					if (bDebug) {
+						printf("Placing object at %lf,%lf,%lf\n", objPos.dX, objPos.dY, objPos.dZ);
+					}					
+					ptrObject->SetPosition(objPos, vdOrient, vel, velRot, false, 0);
+
+					//float fElevationFeet = 0;
+					
+					/*
+					P3DFXYZ offset = { 0, 0, MetersToFeet(m_PlaceDistanceInM) };
+					CComPtr<IBaseObjectV400> spUserObject = NULL;
+					PdkServices::GetSimObjectManager()->GetUserObject((IBaseObjectV400**)&spUserObject);
+					if (spUserObject != nullptr)
+					{
+						spUserObject->GetSurfaceElevation(fElevation, &offset);
+						if (!SUCCEEDED(hRes)) {
+							printf("Get elevation failed: %d\n", hRes);
+						}
+						if (bDebug) {
+							printf("Object at elevation %f\n", fElevationFeet);
+						}
+					}
+					*/
+
+					/*
+					HRESULT hRes = ptrObject->GetSurfaceElevation(fElevationFeet, &offset);
+					if (!SUCCEEDED(hRes)) {
+						printf("Get elevation failed: %d\n", hRes);
+					}
+					if (bDebug) {
+						printf("Object at elevation %f\n", fElevationFeet);
+					}
+					*/
+
+					/*
+					double lfGroundAlt = -1;
+					hRes = ptrObject->GetProperty(L"GROUND ALTITUDE", L"feet", lfGroundAlt, 0);
+					if (SUCCEEDED(hRes)) {
+						printf("setting ground alt: %lf\n", lfGroundAlt);
+						//fStaticCGHeight = (float)lfCg;
+					}
+					*/
+
+					// Set it softly to the ground
+					objPos.dY = fElevation + fStaticCGHeight + 1 ; // 1ft above current altitude - getElevation for offste or for object delivers nonsense here? Maybe bc we are in Menu handler?
+					if (bDebug) {
+						printf("Correcting object to %lf,%lf,%lf\n", objPos.dX, objPos.dY, objPos.dZ);
+
+						worldObjectPlacement.LLA.Altitude = FeetToMeters(objPos.dY);
+					}
+					ptrObject->SetPosition(objPos, vdOrient, vel, velRot, true, 0);
+				}
+				
 			}
 			else {
 				printf("Could not get Object %d %s\n", objectToPickUpID, pickupObjectTitle.c_str());
@@ -594,7 +745,37 @@ protected:
 		}
 	}
 
-    void DrawSimObjects(const CComPtr<IBaseObjectV400> &spUserObject, IObjectRendererV400* pRenderer, ObjectWorldTransform& objTrans, ObjectWorldTransform& cameraTrans, P3DFXYZ end, P3DDXYZ orient, 
+	STDMETHOD_(void, GetForceMoment(__out DXYZ& vForces, __out DXYZ& vMoment))  const  /**< Gets a force moment */
+	{
+		if (m_bForcePhysics) {
+			vForces.dX = 0;
+			vForces.dY = MetersToFeet(9.81) * 100;
+			vForces.dY = 0;
+
+			vMoment.dX = 0;
+			vMoment.dY = 0;
+			vMoment.dZ = 0;
+			printf("GetForceMoment phys\n");
+		} else {
+			printf("GetForceMoment no phys\n");
+		}
+	}
+	
+	STDMETHOD(GetOffset(float& fXFeet, float& fYFeet, float& fZFeet))          const /**< Gets the offset of a force moment */
+	{
+		fXFeet = 0;
+		fYFeet = 0;
+		fZFeet = 0;
+
+		return S_OK;
+	}
+	
+	STDMETHOD(SetForceMultiplier(float scalar))                                      /**< Sets a force multiplier */
+	{
+		return S_OK;
+	}
+
+    void DrawSimObjects(const CComPtr<IBaseObjectV400> &spUserObject, ObjectWorldTransform& objTrans, ObjectWorldTransform& cameraTrans, P3DFXYZ end, P3DDXYZ orient, 
 						DXYZ hoistAttach, DXYZ lalVel, double dEndOverGround, P3DDXYZ slingStartPoint, double dt)
     {
 		double ft2m = 0.3048;
@@ -620,7 +801,7 @@ protected:
 		//objTransTemp.PBH.Bank = 0; // Important! The rope his ots orientation relative to world, not relative to the heli! Nope, now that we rotated to body coords, it's fine.
 		//objTransTemp.PBH.Heading = 0;
 		//objTransTemp.PBH.Pitch = 0;
-		pRenderer->ApplyBodyRelativeOffset(objTransTemp, toEndOfSling, endOfSling); // can only be calculated from object center (as we use "BodyRelativeOffset"), while end is relativ to slingPos
+		m_spRenderService->ApplyBodyRelativeOffset(objTransTemp, toEndOfSling, endOfSling); // can only be calculated from object center (as we use "BodyRelativeOffset"), while end is relativ to slingPos
 
 		// endOfSling.LLA now in degree/m/degree
 				
@@ -632,34 +813,42 @@ protected:
 		endPos.dY = endOfSling.LLA.Altitude / ft2m;		 // ft
 		endPos.dZ = endOfSling.LLA.Latitude / 180 * PI;  // rad
 
-		if (objectToPickUpID == 0 && !m_bUntieObject) { // ready to pickup
+		if (bDebug && objectToPickUpID == 0 && objectPlaced != 0) {
+			// bug sphere to show the object from far away during debugging:
+			ARGBColor colorSphere3(32, 12, 12, 200);
+			m_spRenderService->DrawSphere(worldObjectPlacement, max(20,m_PlaceDistanceInM/20), colorSphere3);
+		}
 
-			if (bCaptVis) {
-				ARGBColor colorSphere3(32, 200, 12, 200);
-				pRenderer->DrawSphere(endOfSling, pickupradius, colorSphere3);
-			}
-			
-			unsigned int numOfCloseObjects = 200;
-			unsigned int objids[200];
-			PdkServices::GetSimObjectManager()->GetObjectsInRadius(endPos, 3*(pickupradius/ft2m), numOfCloseObjects, objids); // radius ignored if less than 2 feet? Oh my! endPos in rad_feet_rad?
+		if (!m_bUntieObject)
+		{
+			if (objectToPickUpID == 0) { // ready to pickup
 
-			//printf("%d objects to pickup\n", numOfCloseObjects);
+				if (bCaptVis) {
+					ARGBColor colorSphere3(32, 200, 12, 200);
+					m_spRenderService->DrawSphere(endOfSling, pickupradius, colorSphere3);
+				}
 
-			for( unsigned int i=0 ; i<numOfCloseObjects ; i++ ) {
-				UINT objId = objids[i];
-				CComPtr<IBaseObjectV400> ptrObject;
-				PdkServices::GetSimObjectManager()->GetObject(objId, &ptrObject);
-				if (ptrObject) {
-					if (!ptrObject->IsUser()) {						
-						wchar_t achTitle[256];
-						ptrObject->GetTitle(achTitle, sizeof(achTitle));
-						wchar_t wachPath[512];
-						ptrObject->GetCfgFilePath(wachPath, sizeof(wachPath));
+				unsigned int numOfCloseObjects = 200;
+				unsigned int objids[200];
+				PdkServices::GetSimObjectManager()->GetObjectsInRadius(endPos, 3 * (pickupradius / ft2m), numOfCloseObjects, objids); // radius ignored if less than 2 feet? Oh my! endPos in rad_feet_rad?
 
-						char achPath[512];
-						wcstombs(achPath, wachPath, 512);
-						ObjectSimCfgProps props = objectSimProps.getObjectSimCfg(achPath); // caches relevant sim cfg values
-						//if (pProps) {
+				//printf("%d objects to pickup\n", numOfCloseObjects);
+
+				for (unsigned int i = 0; i < numOfCloseObjects; i++) {
+					UINT objId = objids[i];
+					CComPtr<IBaseObjectV400> ptrObject;
+					PdkServices::GetSimObjectManager()->GetObject(objId, &ptrObject);
+					if (ptrObject) {
+						if (!ptrObject->IsUser()) {
+							wchar_t achTitle[256];
+							ptrObject->GetTitle(achTitle, sizeof(achTitle));
+							wchar_t wachPath[512];
+							ptrObject->GetCfgFilePath(wachPath, sizeof(wachPath));
+
+							char achPath[512];
+							wcstombs(achPath, wachPath, 512);
+							ObjectSimCfgProps props = objectSimProps.getObjectSimCfg(achPath); // caches relevant sim cfg values
+							//if (pProps) {
 							hoistAttachLoad.dX = -props.hoistAttachLoad.dY;
 							hoistAttachLoad.dY = -props.hoistAttachLoad.dZ;
 							hoistAttachLoad.dZ = -props.hoistAttachLoad.dX;
@@ -687,241 +876,280 @@ protected:
 						pRenderer->ApplyBodyRelativeOffset(posObj, toLoadAttach, toAttachLoadWorld);
 						*/
 
-						ObjectWorldTransform toAttachLoadWorld = getHoistAttachPointInWorldCoords(ptrObject, pRenderer);
+							ObjectWorldTransform toAttachLoadWorld = getHoistAttachPointInWorldCoords(ptrObject);
 
-						if (bCaptVis) {
-							ARGBColor colorSphere3(32, 12, 200, 12);
-							pRenderer->DrawSphere(toAttachLoadWorld, 1, colorSphere3);
-						}
-
-						DXYZ vLonAltLat = extractPosFromWorldDegMeters(toAttachLoadWorld);
-						/*vLonAltLat.dX = DegToRad(toAttachLoadWorld.LLA.Longitude);
-						vLonAltLat.dY = MetersToFeet(toAttachLoadWorld.LLA.Altitude);
-						vLonAltLat.dZ = DegToRad(toAttachLoadWorld.LLA.Latitude);*/
-
-						DXYZ vXYZ      = convertLonAltLat2XYZ(vLonAltLat, earthRadius); // rad_ft_rad
-						DXYZ endPosXYZ = convertLonAltLat2XYZ(endPos, earthRadius);     // rad_ft_rad
-
-						/*
-						CComPtr<IBaseObjectV430> ptrObject43;
-						ptrObject->QueryInterface(IID_IBaseObjectV430, (void **)&ptrObject43);
-						wchar_t achCat[512] = L"";
-						if (ptrObject43) {
-							ptrObject43->GetCategoryName(achCat, sizeof(achCat));
-							//if (wcscmp(achCat, L"Avatar") == 0) {
-							//	objectToPickUpID = objId;
-							//}
-						}
-						*/
-
-						double dist = calcDist(vXYZ, endPosXYZ); // in feet!
-						if (dist*ft2m< pickupradius) {
-							objectToPickUpID = objId;
-							printf("Picking up object %d dist %lf %lf,%lf,%lf vs %lf,%lf,%lf title %ls path %ls\n", objectToPickUpID, dist, vXYZ.dX, vXYZ.dY, vXYZ.dZ, endPosXYZ.dX, endPosXYZ.dY, endPosXYZ.dZ, achTitle, wachPath);
-
-							setForcePhysics(true);
-
-							double lfCg = -1;
-							HRESULT hRes = ptrObject->GetProperty(L"STATIC CG TO GROUND", L"feet", lfCg, 0);
-							if (SUCCEEDED(hRes)) {
-								printf("setting Cg: %lf\n", lfCg);
-								fStaticCGHeight = (float)lfCg;
+							if (bCaptVis) {
+								ARGBColor colorSphere3(32, 12, 200, 12);
+								m_spRenderService->DrawSphere(toAttachLoadWorld, 1, colorSphere3);
 							}
 
-							// get the sim.cfgs [HoistPoint] position, and shuffle as needed:
-							//if (pProps) {
+							DXYZ vLonAltLat = extractPosFromWorldDegMeters(toAttachLoadWorld);
+							/*vLonAltLat.dX = DegToRad(toAttachLoadWorld.LLA.Longitude);
+							vLonAltLat.dY = MetersToFeet(toAttachLoadWorld.LLA.Altitude);
+							vLonAltLat.dZ = DegToRad(toAttachLoadWorld.LLA.Latitude);*/
+
+							DXYZ vXYZ = convertLonAltLat2XYZ(vLonAltLat, earthRadius); // rad_ft_rad
+							DXYZ endPosXYZ = convertLonAltLat2XYZ(endPos, earthRadius);     // rad_ft_rad
+
+							/*
+							CComPtr<IBaseObjectV430> ptrObject43;
+							ptrObject->QueryInterface(IID_IBaseObjectV430, (void **)&ptrObject43);
+							wchar_t achCat[512] = L"";
+							if (ptrObject43) {
+								ptrObject43->GetCategoryName(achCat, sizeof(achCat));
+								//if (wcscmp(achCat, L"Avatar") == 0) {
+								//	objectToPickUpID = objId;
+								//}
+							}
+							*/
+
+							double dist = calcDist(vXYZ, endPosXYZ); // in feet!
+							if (dist*ft2m < pickupradius) {
+								objectToPickUpID = objId;
+								printf("Picking up object %d dist %lf %lf,%lf,%lf vs %lf,%lf,%lf title %ls path %ls\n", objectToPickUpID, dist, vXYZ.dX, vXYZ.dY, vXYZ.dZ, endPosXYZ.dX, endPosXYZ.dY, endPosXYZ.dZ, achTitle, wachPath);
+
+								setForcePhysics(true);
+
+								double lfCg = -1;
+								HRESULT hRes = ptrObject->GetProperty(L"STATIC CG TO GROUND", L"feet", lfCg, 0);
+								if (SUCCEEDED(hRes)) {
+									printf("setting Cg: %lf\n", lfCg);
+									fStaticCGHeight = (float)lfCg;
+								}
+
+								// get the sim.cfgs [HoistPoint] position, and shuffle as needed:
+								//if (pProps) {
 								hoistAttachLoad.dX = -props.hoistAttachLoad.dY;
 								hoistAttachLoad.dY = -props.hoistAttachLoad.dZ;
 								hoistAttachLoad.dZ = -props.hoistAttachLoad.dX;
+								massLoad = props.mass;
 
-								printf("setting hoistpoint: %lf %lf %lf\n", hoistAttachLoad.dX, hoistAttachLoad.dY, hoistAttachLoad.dZ);
-							//}
-							//else {
-							//	printf("Keeping hoistConfig hoistpoint: %lf %lf %lf\n", hoistAttachLoad.dX, hoistAttachLoad.dY, hoistAttachLoad.dZ);
-							//}							
-						}
-						else {
-							// printf("Not picking up object %d dist %lf %ls ", objId, dist, achTitle );
+								printf("setting hoistpoint: %lf %lf %lf mass %ld\n", hoistAttachLoad.dX, hoistAttachLoad.dY, hoistAttachLoad.dZ, massLoad);
+								//}
+								//else {
+								//	printf("Keeping hoistConfig hoistpoint: %lf %lf %lf\n", hoistAttachLoad.dX, hoistAttachLoad.dY, hoistAttachLoad.dZ);
+								//}							
+							}
+							else {
+								// printf("Not picking up object %d dist %lf %ls ", objId, dist, achTitle );
+							}
 						}
 					}
+				}
+			}
+			else { // we do have an object picked up:
+
+				/*if (bCaptVis) {
+					ARGBColor colorSphere(0, 12, 200, 12);
+					pRenderer->DrawSphere(endOfSling, pickupradius, colorSphere);
+				}*/
+				// Object picked up already: render it:			
+				CComPtr<IBaseObjectV400> ptrPickupObject;
+
+				HRESULT hRes = PdkServices::GetSimObjectManager()->GetObject(objectToPickUpID, &ptrPickupObject);
+				if (!SUCCEEDED(hRes)) {
+					printf("GetObject error: %d\n", hRes);
+				}
+				if (ptrPickupObject != nullptr)
+				{
+					P3DDXYZ vel = lalVel; // same velocity as helicopter
+					P3DDXYZ velRot = { 0, 0, 0 };
+
+					double pitchLoadInRad = -atan(sqrt(end.fX*end.fX + end.fZ*end.fZ) / end.fY);
+
+					// Hoist point must be rotatet if load is pitched in the loads coordinate system
+					double yAttach = hoistAttachLoad.dY;
+					double zAttach = hoistAttachLoad.dZ;
+
+					DXYZ hoistAttachLoadRot;
+					hoistAttachLoadRot.dX = hoistAttachLoad.dX;
+					hoistAttachLoadRot.dY = yAttach*cos(pitchLoadInRad) - zAttach*sin(pitchLoadInRad);
+					hoistAttachLoadRot.dZ = yAttach*sin(pitchLoadInRad) + zAttach*cos(pitchLoadInRad);
+
+					// DXYZ finalEndPos = endPos; // rad_ft_rad
+					DXYZ hoistAttachLoadInWorld;
+					DXYZ hoistAttachInHeli;
+					ptrPickupObject->RotateBodyToWorld(hoistAttachLoadRot, hoistAttachLoadInWorld); // from pickup body to world system
+					spUserObject->RotateWorldToBody(hoistAttachLoadInWorld, hoistAttachInHeli);    // from world to helicopter system
+
+					ObjectLocalTransform toAttachedLoad(FeetToMeters(hoistAttachInHeli.dX), FeetToMeters(hoistAttachInHeli.dY), FeetToMeters(hoistAttachInHeli.dZ), 0, 0, 0);
+					ObjectWorldTransform hoistAttachLoad;
+					m_spRenderService->ApplyBodyRelativeOffset(endOfSling, toAttachedLoad, hoistAttachLoad); // can only be calculated from object center (as we use "BodyRelativeOffset"), while end is relativ to slingPos
+
+					P3DDXYZ finalEndPos;
+					finalEndPos.dX = hoistAttachLoad.LLA.Longitude / 180 * PI; // rad
+					finalEndPos.dY = hoistAttachLoad.LLA.Altitude / ft2m;	   // ft
+					finalEndPos.dZ = hoistAttachLoad.LLA.Latitude / 180 * PI;  // rad
+
+					P3DDXYZ vdOrient;
+					vdOrient.dX = pitchLoadInRad;
+					vdOrient.dY = orient.dY;
+					vdOrient.dZ = 0;
+
+					if (m_bForcePhysics) // take the current distance between load hoist point and load attach point on heli as d0; applay force = (d-d0)*k into the direction of that vector
+					{
+						if (!ptrGlobalData->IsPaused())
+						{
+							ObjectWorldTransform toAttachLoadWorld = getHoistAttachPointInWorldCoords(ptrPickupObject);
+							DXYZ vLonAltLatHoistAttach = extractPosFromWorldDegMeters(toAttachLoadWorld);
+
+							// reference latitude and longitude for local ENU coordinate system - why not put it to the hoist attach point!
+							double refLon = vLonAltLatHoistAttach.dX;
+							double refLat = vLonAltLatHoistAttach.dZ;
+
+							if (bDebug) {
+								ARGBColor colorSphereHoistLoad(64, 12, 200, 12);
+								m_spRenderService->DrawSphere(toAttachLoadWorld, 1, colorSphereHoistLoad);
+							}
+
+							// ObjectLocalTransform toSling(FeetToMeters(hoistAttach.dX), FeetToMeters(hoistAttach.dY), FeetToMeters(hoistAttach.dZ), 0, 0, 0);
+							ObjectLocalTransform toSling(FeetToMeters(hoistAttach.dX), FeetToMeters(hoistAttach.dY), FeetToMeters(hoistAttach.dZ), 0, 0, 0);
+							ObjectWorldTransform objHostAttachInWorld = objTrans;
+							m_spRenderService->ApplyBodyRelativeOffset(objTrans, toSling, objHostAttachInWorld);
+							DXYZ vLonAltLatHoistAttachOnHelo = extractPosFromWorldDegMeters(objHostAttachInWorld);
+
+							if (bDebug) {
+								ARGBColor colorSphereHoistHeli(64, 12, 12, 200);
+								m_spRenderService->DrawSphere(objHostAttachInWorld, 1, colorSphereHoistHeli);
+							}
+
+							DXYZ vXYZHostAttachECF = convertLonAltLat2XYZLocal(vLonAltLatHoistAttach, earthRadius, refLon, refLat); // rad_ft_rad to xyz local LonAltLat local system
+							DXYZ vXYZAttachOnHeloECF = convertLonAltLat2XYZLocal(vLonAltLatHoistAttachOnHelo, earthRadius, refLon, refLat);
+
+							DXYZ delta = vectorSubtract(vXYZHostAttachECF, vXYZAttachOnHeloECF); // delta is now exactly the rope vector in ECF
+							double len = getVectorLen(delta);
+							DXYZ dDeltaN; // direction of cable
+							dDeltaN.dX = delta.dX / len;
+							dDeltaN.dY = delta.dY / len;
+							dDeltaN.dZ = delta.dZ / len;
+
+							if (lastRopeLen == 0) {
+								lastRopeLen = len;
+							}
+
+							//diffRopeLen = len - lastRopeLen;
+							diffRopeLen = len - lengthFt;
+							if (diffRopeLen < 0) {
+								diffRopeLen = 0; // rope does not contract!
+							}
+							double ropeforce = diffRopeLen * kRope;
+							double deltaRopeforce = dt > 0 ? (ropeforce - lastRopeForce) / dt : 0;
+							lastRopeForce = ropeforce;
+
+							DXYZ posWorld;
+							DXYZ orient;
+							DXYZ vel;
+							DXYZ orientspeed;
+							ptrPickupObject->GetPosition(posWorld, orient, vel, orientspeed);
+							DXYZ posLocal = convertLonAltLat2XYZLocal(posWorld, earthRadius, refLon, refLat);
+
+							DXYZ force; // actually the accel (already divided by load mass; ropeforce should by ropeforce/m, we assume the rope is accordingly thick for each mass: ropeforece->ropeforce*m)
+							force.dX = dDeltaN.dX * (ropeforce - damping*deltaRopeforce) - vel.dX*speedforce;
+							force.dY = dDeltaN.dY * (ropeforce - damping*deltaRopeforce) - MetersToFeet(9.81) - vel.dY*speedforce;
+							force.dZ = dDeltaN.dZ * (ropeforce - damping*deltaRopeforce) - vel.dZ*speedforce;
+
+							posLocal.dX += (vel.dX*dt + force.dX*dt*dt / 2);
+							posLocal.dY += (vel.dY*dt + force.dY*dt*dt / 2);
+							posLocal.dZ += (vel.dZ*dt + force.dZ*dt*dt / 2);
+
+							vel.dX += (force.dX * dt);
+							vel.dY += (force.dY * dt);
+							vel.dZ += (force.dZ * dt);
+
+							posWorld = convertXYZLocal2LonAltLat(posLocal, earthRadius, refLon, refLat);
+
+							if (posLocal.dY - fElevation >= this->fStaticCGHeight)
+							{
+								// Pitch oriented relative to invisible string:
+								//vdOrient.dX = -atan( delta.dX / delta.dY );
+								//vdOrient.dZ = -atan( delta.dZ / delta.dY );
+
+								ptrPickupObject->SetPosition(posWorld, vdOrient, vel, velRot, false, 0); // orientation still like in no physcis case? Or oriented to invisible cable?
+							}
+							else  // on ground? no deeper!
+							{
+								vdOrient.dX = 0; // no pitch on ground!
+								vdOrient.dZ = 0; // no bank on ground!
+								posWorld.dY = this->fStaticCGHeight + fElevation; // set it on the ground
+								ptrPickupObject->SetPosition(posWorld, vdOrient, vel, velRot, true, 0); // orientation plane to ground
+							}
+
+							//pRope->SetFixed(true, true);   // startpoint fixed
+							pRope->SetFixed(false, true); // endpoint fixed too
+
+							P3DFXYZ deltaEnd;
+							deltaEnd.fX = -delta.dX;
+							deltaEnd.fY = -delta.dY;
+							deltaEnd.fZ = -delta.dZ;
+							pRope->SetEnd(deltaEnd);
+							//P3DFXYZ end = pRope->GetEnd();
+
+							// ------------------------------------
+							// Apply backforce to helicopter:
+							// ------------------------------------
+							spUserObject->GetPosition(posWorld, orient, vel, orientspeed);
+							posLocal = convertLonAltLat2XYZLocal(posWorld, earthRadius, refLon, refLat);
+
+							double mLoad = massLoad; /* 200;
+							hRes = ptrPickupObject->GetProperty(L"EMPTY WEIGHT", L"lbs", mLoad, 0);*/
+							printf("Load mass %lf\n", mLoad);
+
+							force.dX = -dDeltaN.dX *ropeforce*mLoad;  //dDeltaN.dX * (ropeforce - damping*deltaRopeforce) - vel.dX*speedforce;
+							force.dY = -dDeltaN.dY *ropeforce*mLoad; // dDeltaN.dY * (ropeforce - damping*deltaRopeforce) - MetersToFeet(9.81) - vel.dY*speedforce;
+							force.dZ = -dDeltaN.dZ *ropeforce*mLoad; // dDeltaN.dZ * (ropeforce - damping*deltaRopeforce) - vel.dZ*speedforce;
+
+							double heliMass = 100;
+							hRes = spUserObject->GetProperty(L"TOTAL WEIGHT", L"lbs", heliMass, 0);
+							printf("Heli mass %lf\n", heliMass);
+
+							DXYZ accel;
+							accel.dX = force.dX / heliMass;
+							accel.dY = force.dY / heliMass;
+							accel.dZ = force.dZ / heliMass;
+
+							posLocal.dX += (vel.dX*dt + accel.dX*dt*dt / 2);
+							posLocal.dY += (vel.dY*dt + accel.dY*dt*dt / 2);
+							posLocal.dZ += (vel.dZ*dt + accel.dZ*dt*dt / 2);
+
+							vel.dX += (accel.dX * dt);
+							vel.dY += (accel.dY * dt);
+							vel.dZ += (accel.dZ * dt);
+
+							posWorld = convertXYZLocal2LonAltLat(posLocal, earthRadius, refLon, refLat);
+							spUserObject->SetPosition(posWorld, orient, vel, orientspeed, false, 0); // orientation still like in no physcis case? Or oriented to invisible cable?
+						}
+					}
+					else
+					{
+						pRope->SetFixed(false, false); // endpoint swinging free
+
+						if (dEndOverGround > -this->hoistAttachLoad.dY + this->fStaticCGHeight)
+						{
+							ptrPickupObject->SetPosition(finalEndPos, vdOrient, vel, velRot, false, 0);
+
+							// printf("endOverGround: %lf\n", dEndOverGround);
+						}
+						else {
+							// Not yet lifting (or sinking into the ground)
+							// printf("nonlift endOverGround: %lf\n", dEndOverGround);
+
+							finalEndPos.dY = this->fStaticCGHeight + fElevation; // set it on the ground
+							ptrPickupObject->SetPosition(finalEndPos, vdOrient, vel, velRot, true, 0);
+						}
+					}
+				}
+				else {
+					printf("GetObject failed for %d\n", objectToPickUpID);
+					m_bForcePhysics = false;
+					objectToPickUpID = 0;
+					pRope->SetFixed(false, false); // endpoint free if we lost the object
 				}
 			}
 		}
-		else { // we do have an object picked up:
-
-			/*if (bCaptVis) {
-				ARGBColor colorSphere(0, 12, 200, 12);
-				pRenderer->DrawSphere(endOfSling, pickupradius, colorSphere);
-			}*/
-			// Object picked up already: render it:			
-			CComPtr<IBaseObjectV400> ptrPickupObject;
-
-			HRESULT hRes = PdkServices::GetSimObjectManager()->GetObject(objectToPickUpID, &ptrPickupObject);
-			if (!SUCCEEDED(hRes)) {
-				printf("GetObject error: %d\n", hRes ) ;
-			}
-			if (ptrPickupObject != nullptr)
-			{
-				P3DDXYZ vel = lalVel; // same velocity as helicopter
-				P3DDXYZ velRot = { 0, 0, 0 };
-
-				double pitchLoadInRad = -atan(sqrt(end.fX*end.fX + end.fZ*end.fZ) / end.fY);
-
-				// Hoist point must be rotatet if load is pitched in the loads coordinate system
-				double yAttach = hoistAttachLoad.dY;
-				double zAttach = hoistAttachLoad.dZ;
-
-				DXYZ hoistAttachLoadRot;
-				hoistAttachLoadRot.dX = hoistAttachLoad.dX;
-				hoistAttachLoadRot.dY = yAttach*cos(pitchLoadInRad) - zAttach*sin(pitchLoadInRad);
-				hoistAttachLoadRot.dZ = yAttach*sin(pitchLoadInRad) + zAttach*cos(pitchLoadInRad);
-
-				// DXYZ finalEndPos = endPos; // rad_ft_rad
-				DXYZ hoistAttachLoadInWorld;
-				DXYZ hoistAttachInHeli;
-				ptrPickupObject->RotateBodyToWorld(hoistAttachLoadRot, hoistAttachLoadInWorld); // from pickup body to world system
-				spUserObject->RotateWorldToBody(hoistAttachLoadInWorld, hoistAttachInHeli);    // from world to helicopter system
-
-				ObjectLocalTransform toAttachedLoad(FeetToMeters(hoistAttachInHeli.dX), FeetToMeters(hoistAttachInHeli.dY), FeetToMeters(hoistAttachInHeli.dZ), 0, 0, 0);
-				ObjectWorldTransform hoistAttachLoad;
-				pRenderer->ApplyBodyRelativeOffset(endOfSling, toAttachedLoad, hoistAttachLoad); // can only be calculated from object center (as we use "BodyRelativeOffset"), while end is relativ to slingPos
-
-				P3DDXYZ finalEndPos;
-				finalEndPos.dX = hoistAttachLoad.LLA.Longitude / 180 * PI; // rad
-				finalEndPos.dY = hoistAttachLoad.LLA.Altitude / ft2m;	   // ft
-				finalEndPos.dZ = hoistAttachLoad.LLA.Latitude / 180 * PI;  // rad
-
-				P3DDXYZ vdOrient;
-				vdOrient.dX = pitchLoadInRad;
-				vdOrient.dY = orient.dY;
-				vdOrient.dZ = 0;
-
-				if (m_bForcePhysics ) // take the current distance between load hoist point and load attach point on heli as d0; applay force = (d-d0)*k into the direction of that vector
-				{
-					if (!ptrGlobalData->IsPaused())
-					{
-						ObjectWorldTransform toAttachLoadWorld = getHoistAttachPointInWorldCoords(ptrPickupObject, pRenderer);
-						DXYZ vLonAltLatHoistAttach = extractPosFromWorldDegMeters(toAttachLoadWorld);
-
-						// reference latitude and longitude for local ENU coordinate system - why not put it to the hoist attach point!
-						double refLon = vLonAltLatHoistAttach.dX;
-						double refLat = vLonAltLatHoistAttach.dZ;
-
-						if (bDebug) {
-							ARGBColor colorSphereHoistLoad(64, 12, 200, 12);
-							pRenderer->DrawSphere(toAttachLoadWorld, 1, colorSphereHoistLoad);
-						}
-
-						// ObjectLocalTransform toSling(FeetToMeters(hoistAttach.dX), FeetToMeters(hoistAttach.dY), FeetToMeters(hoistAttach.dZ), 0, 0, 0);
-						ObjectLocalTransform toSling(FeetToMeters(hoistAttach.dX), FeetToMeters(hoistAttach.dY), FeetToMeters(hoistAttach.dZ), 0, 0, 0);
-						ObjectWorldTransform objHostAttachInWorld = objTrans;
-						pRenderer->ApplyBodyRelativeOffset(objTrans, toSling, objHostAttachInWorld);
-						DXYZ vLonAltLatHoistAttachOnHelo = extractPosFromWorldDegMeters(objHostAttachInWorld);
-
-						if (bDebug) {
-							ARGBColor colorSphereHoistHeli(64, 12, 12, 200);
-							pRenderer->DrawSphere(objHostAttachInWorld, 1, colorSphereHoistHeli);
-						}
-
-						DXYZ vXYZHostAttachECF = convertLonAltLat2XYZLocal(vLonAltLatHoistAttach, earthRadius, refLon, refLat); // rad_ft_rad to xyz local LonAltLat local system
-						DXYZ vXYZAttachOnHeloECF = convertLonAltLat2XYZLocal(vLonAltLatHoistAttachOnHelo, earthRadius, refLon, refLat);
-
-						DXYZ delta = vectorSubtract(vXYZHostAttachECF, vXYZAttachOnHeloECF); // delta is now exactly the rope vector in ECF
-						double len = getVectorLen(delta);
-						DXYZ dDeltaN; // direction of cable
-						dDeltaN.dX = delta.dX / len;
-						dDeltaN.dY = delta.dY / len;
-						dDeltaN.dZ = delta.dZ / len;
-
-						if (lastRopeLen == 0) {
-							lastRopeLen = len;
-						}
-
-						//diffRopeLen = len - lastRopeLen;
-						diffRopeLen = len - lengthFt ;
-						if (diffRopeLen < 0) {
-							diffRopeLen = 0; // rope does not contract!
-						}
-						double ropeforce = diffRopeLen * kRope;
-						double deltaRopeforce = dt>0?(ropeforce - lastRopeForce) / dt:0;
-						lastRopeForce = ropeforce;
-
-						DXYZ posWorld;
-						DXYZ orient;
-						DXYZ vel;
-						DXYZ orientspeed;
-						ptrPickupObject->GetPosition(posWorld, orient, vel, orientspeed);
-						DXYZ posLocal = convertLonAltLat2XYZLocal(posWorld, earthRadius, refLon, refLat);
-
-						DXYZ force;
-						force.dX = dDeltaN.dX * (ropeforce - damping*deltaRopeforce) - vel.dX*speedforce ;
-						force.dY = dDeltaN.dY * (ropeforce - damping*deltaRopeforce) - MetersToFeet(9.81) - vel.dY*speedforce;
-						force.dZ = dDeltaN.dZ * (ropeforce - damping*deltaRopeforce) - vel.dZ*speedforce;
-
-						posLocal.dX += (vel.dX*dt + force.dX*dt*dt / 2);
-						posLocal.dY += (vel.dY*dt + force.dY*dt*dt / 2);
-						posLocal.dZ += (vel.dZ*dt + force.dZ*dt*dt / 2);
-
-						vel.dX += (force.dX * dt);
-						vel.dY += (force.dY * dt);
-						vel.dZ += (force.dZ * dt);
-
-						posWorld = convertXYZLocal2LonAltLat(posLocal, earthRadius, refLon, refLat);
-
-						if( posLocal.dY - fElevation >= this->fStaticCGHeight )
-						{ 
-							// Pitch oriented relative to invisible string:
-							//vdOrient.dX = -atan( delta.dX / delta.dY );
-							//vdOrient.dZ = -atan( delta.dZ / delta.dY );
-
-							ptrPickupObject->SetPosition(posWorld, vdOrient, vel, velRot, false, 0); // orientation still like in no physcis case? Or oriented to invisible cable?
-						}
-						else  // on ground? no deeper!
-						{
-							vdOrient.dX = 0; // no pitch on ground!
-							vdOrient.dZ = 0; // no bank on ground!
-							posWorld.dY = this->fStaticCGHeight + fElevation; // set it on the ground
-							ptrPickupObject->SetPosition(posWorld, vdOrient, vel, velRot, true, 0); // orientation plane to ground
-						}
-
-						//pRope->SetFixed(true, true);   // startpoint fixed
-						pRope->SetFixed(false, true); // endpoint fixed too
-
-						P3DFXYZ deltaEnd;
-						deltaEnd.fX = -delta.dX;
-						deltaEnd.fY = -delta.dY;
-						deltaEnd.fZ = -delta.dZ;
-						pRope->SetEnd(deltaEnd);
-						//P3DFXYZ end = pRope->GetEnd();
-					}
-				}
-				else
-				{
-					pRope->SetFixed(false, false); // endpoint swinging free
-
-					if (dEndOverGround > -this->hoistAttachLoad.dY + this->fStaticCGHeight)
-					{
-						ptrPickupObject->SetPosition(finalEndPos, vdOrient, vel, velRot, false, 0);
-
-						// printf("endOverGround: %lf\n", dEndOverGround);
-					}
-					else {
-						// Not yet lifting (or sinking into the ground)
-						// printf("nonlift endOverGround: %lf\n", dEndOverGround);
-
-						finalEndPos.dY = this->fStaticCGHeight + fElevation; // set it on the ground
-						ptrPickupObject->SetPosition(finalEndPos, vdOrient, vel, velRot, true, 0);
-					}
-				}
-			}
-			else {
-				printf("GetObject failed for %d\n", objectToPickUpID);
-			}
-		}		
 
 		// Textout
 		IObjectRendererV440 *pV440Render = NULL;
-		pRenderer->QueryInterface(IID_IObjectRendererV440, (void **)&pV440Render);
+		m_spRenderService->QueryInterface(IID_IObjectRendererV440, (void **)&pV440Render);
 		if (pV440Render) {
 			wchar_t szText[1024];
 			ShowConfig(szText, 1024);
@@ -945,6 +1173,70 @@ protected:
 
 		pRope->SetFixed(false, false); // endpoint free
 	}
+
+	void SetObjectPlacement(CALLBACK_IDS m_EventID)
+	{
+		// clear checks:
+		m_spPickupObjectsPlacementAtHoist->SetChecked(false);
+		m_spPickupObjectsPlacementUnderHeli->SetChecked(false);
+		m_spPickupObjectsPlacement5mAhead->SetChecked(false);
+		m_spPickupObjectsPlacement10mAhead->SetChecked(false);
+		m_spPickupObjectsPlacement100mAhead->SetChecked(false);
+		m_spPickupObjectsPlacement1nmAhead->SetChecked(false);
+		m_spPickupObjectsPlacement5nmAhead->SetChecked(false);
+		m_spPickupObjectsPlacement10nmAhead->SetChecked(false);
+
+		switch (m_EventID)
+		{
+		case PICKUP_OBJECT_PLACE_ATTHOIST:
+			m_bPlaceAtHoist = true;
+			m_PlaceDistanceInM = 0;
+			m_spPickupObjectsPlacementAtHoist->SetChecked(true);
+			break;
+
+		case PICKUP_OBJECT_PLACE_UNDER:
+			m_bPlaceAtHoist = false;
+			m_PlaceDistanceInM = 0;
+			m_spPickupObjectsPlacementUnderHeli->SetChecked(true);
+			break;
+
+		case PICKUP_OBJECT_PLACE_5mAHEAD:
+			m_bPlaceAtHoist = false;
+			m_PlaceDistanceInM = 50; // nope, 5 is nonsens, 50 is better
+			m_spPickupObjectsPlacement5mAhead->SetChecked(true);
+			break;
+
+		case PICKUP_OBJECT_PLACE_10mAHEAD:
+			m_bPlaceAtHoist = false;
+			m_PlaceDistanceInM = 10;
+			m_spPickupObjectsPlacement10mAhead->SetChecked(true);
+			break;
+
+		case PICKUP_OBJECT_PLACE_100mAHEAD:
+			m_bPlaceAtHoist = false;
+			m_PlaceDistanceInM = MetersToFeet(100);
+			m_spPickupObjectsPlacement100mAhead->SetChecked(true);
+			break;
+
+		case PICKUP_OBJECT_PLACE_1nmAHEAD:
+			m_bPlaceAtHoist = false;
+			m_PlaceDistanceInM = MilesToMeters(1);
+			m_spPickupObjectsPlacement1nmAhead->SetChecked(true);
+			break;
+
+		case PICKUP_OBJECT_PLACE_5nmAHEAD:
+			m_bPlaceAtHoist = false;
+			m_PlaceDistanceInM = MilesToMeters(5);
+			m_spPickupObjectsPlacement5nmAhead->SetChecked(true);
+			break;
+
+		case PICKUP_OBJECT_PLACE_10nmAHEAD:
+			m_bPlaceAtHoist = false;
+			m_PlaceDistanceInM = MilesToMeters(10);
+			m_spPickupObjectsPlacement10nmAhead->SetChecked(true);
+			break;
+		}
+	}		
 
 	void ShowConfig( wchar_t *szText, size_t bufSize )
 	{
@@ -1005,6 +1297,18 @@ void HoistP3DPlugin::MenuCallback::Invoke(P3D::IParameterListV400 * pParams)
 
 	switch (m_EventID)
 	{
+	case PICKUP_OBJECT_PLACE_ATTHOIST:
+	case PICKUP_OBJECT_PLACE_UNDER:
+	case PICKUP_OBJECT_PLACE_5mAHEAD:
+	case PICKUP_OBJECT_PLACE_10mAHEAD:
+	case PICKUP_OBJECT_PLACE_100mAHEAD:
+	case PICKUP_OBJECT_PLACE_1nmAHEAD:
+	case PICKUP_OBJECT_PLACE_5nmAHEAD:
+	case PICKUP_OBJECT_PLACE_10nmAHEAD:
+
+		s_pCustomObjectsPlugin->SetObjectPlacement(m_EventID);
+		break;
+
 	case CREATE_AND_ATTACH_OBJECT:
 	{
 		s_pCustomObjectsPlugin->CreateAndAttachObject();

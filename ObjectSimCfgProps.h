@@ -18,6 +18,8 @@ public:
 	ObjectSimCfgProps() {
 		hoistAttachLoad = { 0, 0, 0 };
 	}
+
+	double mass = 200;
 };
 
 class CacheObjectSimCfgProps
@@ -44,6 +46,12 @@ public:
 		{
 			ReadConfig configReaders(true); // wide char files!
 			bool inHoistPointSection = false;
+
+			configReaders.addEntry("Empty Weight", [this, path](char *pszConfig)
+			{
+				double &mass = cachedSimCfgs[path].mass;
+				sscanf(pszConfig, "%lf", &mass);
+			});
 
 			configReaders.addEntry("title", [this,path](char *pszConfig)
 			{

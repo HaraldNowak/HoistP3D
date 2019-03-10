@@ -17,6 +17,8 @@ using namespace P3D;
 #define FeetToMeters(feet)  ((feet)*(0.3048))
 #define MetersToFeet(feet)  ((feet)/(0.3048))
 
+#define MilesToMeters(miles) ((miles)*1852)
+
 inline double calcDist(DXYZ vXYZ, DXYZ endPosXYZ)
 {
 	double dx = vXYZ.dX - endPosXYZ.dX;
