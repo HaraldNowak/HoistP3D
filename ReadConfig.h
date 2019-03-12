@@ -62,11 +62,11 @@ public:
 
 				fgetws(wachLine, sizeof(wachLine), fp);
 				wcstombs(achLine, wachLine, 1024);
-				printf("wchar Line: %s", achLine);
+				//printf("wchar Line: %s", achLine);
 			}
 			else {
 				fgets(achLine, sizeof(achLine), fp);
-				printf("char Line: %s", achLine);
+				//printf("char Line: %s", achLine);
 			}
 			char *pszConfig = NULL;
 			for (auto mapEntry : configReaders) {

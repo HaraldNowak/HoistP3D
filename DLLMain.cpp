@@ -26,6 +26,8 @@ using namespace P3D;
 
 class HoistP3DPlugin : public PdkPlugin, HoistP3DBase, IForceElement
 {
+	bool m_bEnabled = false;
+
 	double lengthFt = 5;
 	double maxLengthFt = 100;
 	double minLengthFt = 5;
@@ -38,7 +40,12 @@ class HoistP3DPlugin : public PdkPlugin, HoistP3DBase, IForceElement
 
 	DXYZ hoistAttach = { 0, 0, 0 };
 	DXYZ hoistAttachLoad = { 0, 0, 0 };
+	
 	double massLoad = 200;
+	double bankMomentOfInertia = 110000;
+	double yawMomentOfInertia = 110000;
+	double pitchMomentOfInertia = 250000;
+
 	float fRopeMass = 0.2;
 	float fStaticCGHeight = 5;
 
@@ -121,6 +128,8 @@ class HoistP3DPlugin : public PdkPlugin, HoistP3DBase, IForceElement
 	CComPtr<P3D::IMenuItemV410> m_spPickupObjectsParentMenu;
 	vector<CComPtr<P3D::IMenuItemV410> > m_VecMenuPickupObject;
 
+	CComPtr<P3D::IMenuItemV410> m_spMenuAddon;
+
 	enum CALLBACK_IDS {
 		DRAW_GRID,
 		DRAW_OBJS,
@@ -144,6 +153,8 @@ class HoistP3DPlugin : public PdkPlugin, HoistP3DBase, IForceElement
 		PICKUP_OBJECT_PLACE_10nmAHEAD,
 
 		CREATE_AND_ATTACH_OBJECT,
+
+		ENABLE,
 
 		PICKUP_OBJECT_BASE = 100
 	};
@@ -175,12 +186,7 @@ public:
 
 	HoistP3DPlugin() : PdkPlugin()
     {
-		bool bRc = ReadConfigFile();
-		if (bRc == true) // no hoistConfig.txt found? no hoist menu!
-		{
-			// Create top level menu
-			topHoistMenu = CreateTopLevelMenu();
-		}
+		CreateAddonsMenu();
 
 		m_bHoistUp = false;
 		m_bHoistDown = false;
@@ -188,13 +194,43 @@ public:
 		m_uOneSecondTick = 0;
     }
 
-	void RemoveTopLevelMenu()
+	void BuildMenuAndConfig()
 	{
-		if (topHoistMenu != 0) {
-			P3D::PdkServices::GetMenuService()->RemoveItem(topHoistMenu, NO_PARENT);
-			topHoistMenu = 0;
+		printf("BuildMenuAndConfig\n");
+		bool bRc = ReadAircraftConfigFile();
+		RemoveTopLevelMenu();
+		if (bRc == true) // no hoistConfig.txt found? no hoist menu!
+		{			
+			topHoistMenu = CreateTopLevelMenu();
+		} else {
+			removeRopeAndPickedupObject(); // should there be any rope or object present, get rid of that too
 		}
 	}
+
+	void RemoveTopLevelMenu()
+	{
+		printf("RemoveTopLevelMenu\n");
+		if (topHoistMenu != 0) {
+			printf("RemoveTopLevelMenu action\n"); 
+			HRESULT hRes = P3D::PdkServices::GetMenuService()->RemoveItem(topHoistMenu, NO_PARENT);
+			topHoistMenu = 0;
+			printf("RemoveTopLevelMenu action done %d\n", hRes);
+		}
+	}
+
+	void CreateAddonsMenu()
+	{
+		printf("CreateAddonsMenu\n");
+		m_spMenuAddon.Attach(P3D::PdkServices::GetMenuService()->CreateMenuItem());
+		m_spMenuAddon->SetType(P3D::MenuTypePdk::MENU_CHECK_ITEM);
+		m_spMenuAddon->SetChecked(false);
+		m_spMenuAddon->SetText(L"HoistP3D Enable");
+		MenuCallback * callback = new MenuCallback(ENABLE);
+		m_spMenuAddon->RegisterCallback(callback);
+		HRESULT hRes = P3D::PdkServices::GetMenuService()->AddItem(m_spMenuAddon->GetId(), TOOLS_ITEM_ID, 0);
+		printf("CreateAddonsMenu complete %d\n", hRes);
+	}
+
 	int CreateTopLevelMenu()
 	{
 		int iHoistMenuId = 0;
@@ -309,6 +345,8 @@ public:
 
     virtual void OnCustomRender(IParameterListV400* pParams) override
     {
+		if (m_bEnabled == false) return;
+
         // Get the Object Renderer service from the callback params
 		CComPtr<IVisualEffectManagerV430> ptrVisEffect = NULL;
 		CComPtr<ISimObjectManagerV440> ptrSimObjectManager = NULL;
@@ -344,23 +382,42 @@ public:
                 DrawUserSimObjects(ptrVisEffect, pParams->GetServiceProvider());
 			}
 			else {
-				printf("Rope will be reinited...\n");
+				// printf("Rope will be reinited...\n");
 				bInitRope = true; // force reinit of rope!
-				objectToPickUpID = 0; // let go of objects
-
-				if (pRope) {
-					pRope->Release();
-					pRope = NULL;
-				}
+				removeRopeAndPickedupObject();
 			}
         }
     }
+
+	void removeRopeAndPickedupObject()
+	{
+		objectToPickUpID = 0; // let go of objects
+		if (pRope) {
+			pRope->Release();
+			pRope = NULL;
+		}
+	}
 
     virtual void OnOneHz(IParameterListV400* pParams) override
     {
         // keep track count of seconds. This is used for alternating object color.
         m_uOneSecondTick++;
     }
+
+	bool ReadAircraftConfigFile()
+	{
+		CComPtr<IBaseObjectV400> spUserObject = NULL;
+		PdkServices::GetSimObjectManager()->GetUserObject((IBaseObjectV400**)&spUserObject);
+		wchar_t wachPath[512];
+		spUserObject->GetCfgDir(wachPath, 512);
+		char achPath[512];
+		wcstombs(achPath, wachPath, 512);
+		hoistConfigPath = string(achPath) + "\\hoistConfig.txt";
+		printf("aircraft hoistConfig path: %s\n", hoistConfigPath.c_str()); // ööö to be moved to airplane load event!
+		bool bRc = ReadConfigFile();
+
+		return bRc;
+	}
 
 protected:
 
@@ -410,13 +467,7 @@ protected:
 			
 			if (bInitRope || pRope == NULL) {
 
-				wchar_t wachPath[512];
-				spUserObject->GetCfgDir(wachPath, 512);
-				char achPath[512];
-				wcstombs(achPath, wachPath, 512);
-				hoistConfigPath = string(achPath) + "\\hoistConfig.txt";
-				printf("hoistConfig path: %s\n", hoistConfigPath.c_str()); // ööö to be moved to airplane load event!
-				bool bRc = ReadConfigFile();
+				bool bRc = ReadAircraftConfigFile(); // do we still need this here?
 				//if( bRc == tr)
 
 				P3DFXYZ vEnd = vStart;
@@ -924,7 +975,7 @@ protected:
 								hoistAttachLoad.dZ = -props.hoistAttachLoad.dX;
 								massLoad = props.mass;
 
-								printf("setting hoistpoint: %lf %lf %lf mass %ld\n", hoistAttachLoad.dX, hoistAttachLoad.dY, hoistAttachLoad.dZ, massLoad);
+								printf("setting hoistpoint: %lf %lf %lf mass %lf\n", hoistAttachLoad.dX, hoistAttachLoad.dY, hoistAttachLoad.dZ, massLoad);
 								//}
 								//else {
 								//	printf("Keeping hoistConfig hoistpoint: %lf %lf %lf\n", hoistAttachLoad.dX, hoistAttachLoad.dY, hoistAttachLoad.dZ);
@@ -1098,10 +1149,14 @@ protected:
 							force.dY = -dDeltaN.dY *ropeforce*mLoad; // dDeltaN.dY * (ropeforce - damping*deltaRopeforce) - MetersToFeet(9.81) - vel.dY*speedforce;
 							force.dZ = -dDeltaN.dZ *ropeforce*mLoad; // dDeltaN.dZ * (ropeforce - damping*deltaRopeforce) - vel.dZ*speedforce;
 
+							DXYZ forceInHeliCoord;
+							spUserObject->RotateWorldToBody(force, forceInHeliCoord);    // from world to helicopter system
+
 							double heliMass = 100;
 							hRes = spUserObject->GetProperty(L"TOTAL WEIGHT", L"lbs", heliMass, 0);
 							printf("Heli mass %lf\n", heliMass);
 
+							// Linear forces:
 							DXYZ accel;
 							accel.dX = force.dX / heliMass;
 							accel.dY = force.dY / heliMass;
@@ -1114,6 +1169,28 @@ protected:
 							vel.dX += (accel.dX * dt);
 							vel.dY += (accel.dY * dt);
 							vel.dZ += (accel.dZ * dt);
+
+							// angular forces (i.e. moments): (assuming reference position = center of gravity)
+
+							// forceInHeliCoord.dX and forceInHeliCoord.dZ are the forces creating a moment on bank and pitch (if hoist is on symmetry axis)
+							DXYZ moment = crossProduct(forceInHeliCoord, -hoistAttach);
+							
+							double bankMoment  = moment.dZ; // forceInHeliCoord.dX * hoistAttach.dY + forceInHeliCoord.dY * hoistAttach.dX;
+							double pitchMoment = moment.dX; // forceInHeliCoord.dZ *hoistAttach.dY;
+							double yawMoment =   moment.dY; // forceInHeliCoord.dX * hoistAttach.dY + forceInHeliCoord.dY * hoistAttach.dX;
+
+							double bankAccel = bankMomentOfInertia!=0? bankMoment / SlugsToLbs(bankMomentOfInertia) : 0 ;
+							double pitchAccel = pitchMomentOfInertia!=0? pitchMoment / SlugsToLbs(pitchMomentOfInertia) : 0 ;
+							double yawAccel = yawMomentOfInertia != 0 ? yawMoment / SlugsToLbs(yawMomentOfInertia) : 0;
+
+							// orientation is PHB:
+							orient.dX += (orientspeed.dX*dt + pitchAccel*dt*dt / 2);
+							orient.dY += (orientspeed.dY*dt + yawAccel*dt*dt / 2);
+							orient.dZ += (orientspeed.dZ*dt + bankAccel*dt*dt / 2);
+
+							orientspeed.dX += (pitchAccel * dt);
+							orientspeed.dY += (yawAccel * dt);
+							orientspeed.dZ += (bankAccel * dt);
 
 							posWorld = convertXYZLocal2LonAltLat(posLocal, earthRadius, refLon, refLat);
 							spUserObject->SetPosition(posWorld, orient, vel, orientspeed, false, 0); // orientation still like in no physcis case? Or oriented to invisible cable?
@@ -1259,6 +1336,10 @@ protected:
 		configReaders.addEntry("pickupObjectDir",   [this](char *pszConfig) { printf("podir:%s\n", pszConfig); char achPickupObjectDir[256] = "";  sscanf(pszConfig, "%s", achPickupObjectDir); pickupObjectDirectory = achPickupObjectDir; });
 		configReaders.addEntry("debug",				[this](char *pszConfig) { printf("db:%s\n", pszConfig); sscanf(pszConfig, "%d", &bDebug ); });
 
+		configReaders.addEntry("empty_weight_pitch_MOI", [this](char *pszConfig) { printf("empty_weight_pitch_MOI:%s\n", pszConfig); sscanf(pszConfig, "%lf", &pitchMomentOfInertia); });
+		configReaders.addEntry("empty_weight_roll_MOI", [this](char *pszConfig) { printf("empty_weight_roll_MOI:%s\n", pszConfig); sscanf(pszConfig, "%lf", &bankMomentOfInertia); });
+		configReaders.addEntry("empty_weight_yaw_MOI", [this](char *pszConfig) { printf("empty_weight_yaw_MOI:%s\n", pszConfig); sscanf(pszConfig, "%lf", &yawMomentOfInertia); });
+		
 		return configReaders.readFile(hoistConfigPath.c_str());
 	}
 };
@@ -1288,7 +1369,7 @@ void __stdcall DLLStop(void)
 void HoistP3DPlugin::MenuCallback::Invoke(P3D::IParameterListV400 * pParams)
 {
 	if (m_EventID > PICKUP_OBJECT_BASE) {
-		printf("Abot to create %s\n", this->name.c_str());
+		//printf("Abot to create %s\n", this->name.c_str());
 
 		s_pCustomObjectsPlugin->pickupObjectTitle = this->name;
 		s_pCustomObjectsPlugin->CreateAndAttachObject();
@@ -1297,6 +1378,19 @@ void HoistP3DPlugin::MenuCallback::Invoke(P3D::IParameterListV400 * pParams)
 
 	switch (m_EventID)
 	{
+	case ENABLE:
+		s_pCustomObjectsPlugin->m_bEnabled = !s_pCustomObjectsPlugin->m_bEnabled;		
+		if (s_pCustomObjectsPlugin->m_bEnabled) {
+			s_pCustomObjectsPlugin->BuildMenuAndConfig(); // will create a hoist menu if hoistConfig.txt is present
+		} else {
+			s_pCustomObjectsPlugin->removeRopeAndPickedupObject(); // make sling disappear
+			s_pCustomObjectsPlugin->RemoveTopLevelMenu();
+
+			s_pCustomObjectsPlugin->objectSimProps.clear();
+		}
+		s_pCustomObjectsPlugin->m_spMenuAddon->SetChecked(s_pCustomObjectsPlugin->m_bEnabled);
+		break;
+
 	case PICKUP_OBJECT_PLACE_ATTHOIST:
 	case PICKUP_OBJECT_PLACE_UNDER:
 	case PICKUP_OBJECT_PLACE_5mAHEAD:

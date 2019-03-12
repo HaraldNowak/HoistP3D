@@ -35,6 +35,11 @@ public:
 		return rc;
 	}
 
+	void clear()
+	{
+		cachedSimCfgs.clear();
+	}
+
 	ObjectSimCfgProps getObjectSimCfg(const char *pszPath)
 	{
 		std::string path(pszPath);

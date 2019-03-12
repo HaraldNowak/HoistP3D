@@ -19,6 +19,31 @@ using namespace P3D;
 
 #define MilesToMeters(miles) ((miles)*1852)
 
+#define SlugsToLbs(slugs) ((slugs)*32.174)
+#define LbsToSlugs(slugs) ((slugs)/32.174)
+
+inline DXYZ operator-(const DXYZ &xyz)
+{
+	DXYZ ret;
+
+	ret.dX = -xyz.dX;
+	ret.dY = -xyz.dY;
+	ret.dZ = -xyz.dZ;
+
+	return ret;
+}
+
+inline DXYZ crossProduct(DXYZ v1, DXYZ v2)
+{
+	DXYZ ret;
+
+	ret.dX = v1.dY*v2.dZ - v1.dZ*v2.dY;
+	ret.dY = -(v1.dX*v2.dZ - v1.dZ*v2.dX);
+	ret.dZ = v1.dX*v2.dY - v1.dY*v2.dX;
+
+	return ret;
+}
+
 inline double calcDist(DXYZ vXYZ, DXYZ endPosXYZ)
 {
 	double dx = vXYZ.dX - endPosXYZ.dX;
