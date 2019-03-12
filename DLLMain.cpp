@@ -1096,7 +1096,7 @@ protected:
 
 							DXYZ force; // actually the accel (already divided by load mass; ropeforce should by ropeforce/m, we assume the rope is accordingly thick for each mass: ropeforece->ropeforce*m)
 							force.dX = dDeltaN.dX * (ropeforce - damping*deltaRopeforce) - vel.dX*speedforce;
-							force.dY = dDeltaN.dY * (ropeforce - damping*deltaRopeforce) - MetersToFeet(9.81) - vel.dY*speedforce;
+							force.dY = dDeltaN.dY * (ropeforce - damping*deltaRopeforce) - vel.dY*speedforce; // - MetersToFeet(9.81) nope, sim does that already!
 							force.dZ = dDeltaN.dZ * (ropeforce - damping*deltaRopeforce) - vel.dZ*speedforce;
 
 							posLocal.dX += (vel.dX*dt + force.dX*dt*dt / 2);
